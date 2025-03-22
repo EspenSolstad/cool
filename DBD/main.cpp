@@ -3,6 +3,7 @@
 #include <iostream>
 #include <thread>
 #include <iomanip>
+#include <vector>
 #include "memory.h"
 #include "offsets.h"
 #include "item.h"
@@ -28,20 +29,53 @@ int main() {
 
     uintptr_t base = GetModuleBaseAddress(pid, L"DeadByDaylight-Win64-Shipping.exe");
 
-    uintptr_t matchAddr = FindPattern(hProc, base, 0x5000000,
-        (BYTE*)"\x48\x8B\x0D\x00\x00\x00\x00\x48\x85\xC9\x74\x3F",
-        "xxx????xxxxx");
-
-    if (!matchAddr) {
-        std::cout << "[-] Entity list pattern not found.\n";
+    std::cout << "[*] Waiting for match to start...\n";
+    
+    uintptr_t entityListAddr = 0;
+    uintptr_t matchStateAddr = 0;
+    uintptr_t itemListAddr = 0;
+    const int MAX_ATTEMPTS = 30; // 30 seconds timeout
+    int attempts = 0;
+    
+    while (attempts < MAX_ATTEMPTS) {
+        // Create pattern scan list
+        std::vector<std::pair<uintptr_t*, std::pair<const BYTE*, const char*>>> patterns = {
+            {&entityListAddr, {Patterns::ENTITY_LIST, Patterns::ENTITY_MASK}},
+            {&matchStateAddr, {Patterns::MATCH_STATE, Patterns::MATCH_STATE_MASK}},
+            {&itemListAddr, {Patterns::ITEM_LIST, Patterns::ITEM_MASK}}
+        };
+        
+        // Try to find all patterns
+        bool found = true;
+        for (auto& [resultPtr, patternPair] : patterns) {
+            *resultPtr = FindPattern(hProc, base, 0x5000000, patternPair.first, patternPair.second);
+            if (!*resultPtr) {
+                found = false;
+                break;
+            }
+        }
+        
+        if (found) {
+            std::cout << "\n[+] Match detected! All patterns found.\n";
+            break;
+        }
+        
+        Sleep(1000); // Wait 1 second between attempts
+        attempts++;
+        std::cout << "[*] Searching for match... " << attempts << "/" << MAX_ATTEMPTS << "\r";
+    }
+    
+    if (!entityListAddr || !matchStateAddr || !itemListAddr) {
+        std::cout << "\n[-] Could not find all required patterns. Are you in a match?\n";
+        std::cout << "[*] Tip: Start the program after entering a match\n";
         CloseHandle(hProc);
         return 1;
     }
 
     int relOffset = 0;
-    ReadProcessMemory(hProc, (LPCVOID)(matchAddr + 3), &relOffset, sizeof(int), 0);
+    ReadProcessMemory(hProc, (LPCVOID)(entityListAddr + 3), &relOffset, sizeof(int), 0);
 
-    uintptr_t entityListPtr = matchAddr + 7 + relOffset;
+    uintptr_t entityListPtr = entityListAddr + 7 + relOffset;
 
     std::cout << "[+] Entity list pointer resolved to: 0x" << std::hex << entityListPtr << "\n";
 
