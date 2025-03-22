@@ -39,10 +39,14 @@ public:
             
         bool isKiller = (role == 1); // 1 = Killer, 0 = Survivor
         
-        // Get position from player
-        Vector3 position;
-        ReadProcessMemory(hProc, (LPCVOID)(address + 0x1A0), 
-            &position, sizeof(Vector3), nullptr);
+        // Get root component for position
+        uintptr_t rootComponent = 0;
+        ReadProcessMemory(hProc, (LPCVOID)(address + 0x1A8), &rootComponent, sizeof(uintptr_t), nullptr);
+        
+        Vector3 position = {0, 0, 0};
+        if (rootComponent) {
+            ReadProcessMemory(hProc, (LPCVOID)(rootComponent + 0x1A0), &position, sizeof(Vector3), nullptr);
+        }
             
         // Get state
         uint8_t camperState = 0;
@@ -64,21 +68,25 @@ public:
                 &inventory, sizeof(uintptr_t), nullptr);
                 
             if (inventory) {
-                uintptr_t currentItem = 0;
-                ReadProcessMemory(hProc, (LPCVOID)(inventory + 0x1A0), // Offset to current item
-                    &currentItem, sizeof(uintptr_t), nullptr);
-                    
-                if (currentItem) {
+                // Get current item count
+                int32_t itemCount = 0;
+                ReadProcessMemory(hProc, (LPCVOID)(inventory + Offsets::ItemCount), &itemCount, sizeof(int32_t), nullptr);
+                
+                if (itemCount > 0) {
                     uint8_t itemType = 0;
-                    ReadProcessMemory(hProc, (LPCVOID)(currentItem + Offsets::ItemType),
-                        &itemType, sizeof(uint8_t), nullptr);
-                        
-                    switch(itemType) {
-                        case 0: itemName = "Medkit"; break;
-                        case 1: itemName = "Flashlight"; break;
-                        case 2: itemName = "Toolbox"; break;
-                        case 3: itemName = "Map"; break;
-                        case 4: itemName = "Key"; break;
+                    ReadProcessMemory(hProc, (LPCVOID)(inventory + Offsets::ItemType), &itemType, sizeof(uint8_t), nullptr);
+                    
+                    bool isInUse = false;
+                    ReadProcessMemory(hProc, (LPCVOID)(inventory + Offsets::IsInUse), &isInUse, sizeof(bool), nullptr);
+                    
+                    if (isInUse) {
+                        switch(itemType) {
+                            case 0: itemName = "Medkit"; break;
+                            case 1: itemName = "Flashlight"; break;
+                            case 2: itemName = "Toolbox"; break;
+                            case 3: itemName = "Map"; break;
+                            case 4: itemName = "Key"; break;
+                        }
                     }
                 }
             }

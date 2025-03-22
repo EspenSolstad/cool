@@ -82,11 +82,14 @@ public:
     }
 
     void MonitorCharges(HANDLE hProc, uintptr_t itemAddr) {
-        float charges;
-        if (ReadProcessMemory(hProc, (LPCVOID)(itemAddr + Offsets::ItemCharges), &charges, sizeof(float), nullptr)) {
+        // Monitor item state instead of charges
+        uint8_t state;
+        if (ReadProcessMemory(hProc, (LPCVOID)(itemAddr + Offsets::ItemState), &state, sizeof(uint8_t), nullptr)) {
             for (auto& item : trackedItems) {
-                if (item.second.lastCharges != charges) {
-                    item.second.UpdateCharges(charges);
+                if (item.second.properties.type != ItemType::NONE) {
+                    bool isInUse = false;
+                    ReadProcessMemory(hProc, (LPCVOID)(itemAddr + Offsets::IsInUse), &isInUse, sizeof(bool), nullptr);
+                    item.second.isInUse = isInUse;
                 }
             }
         }
@@ -96,10 +99,11 @@ public:
 };
 
 void ProcessAddons(HANDLE hProc, uintptr_t itemAddr, ItemProperties& props) {
-    int addon1ID, addon2ID;
-    ReadProcessMemory(hProc, (LPCVOID)(itemAddr + Offsets::ItemAddon1), &addon1ID, sizeof(int), nullptr);
-    ReadProcessMemory(hProc, (LPCVOID)(itemAddr + Offsets::ItemAddon2), &addon2ID, sizeof(int), nullptr);
+    // Read item type and state
+    uint8_t type;
+    ReadProcessMemory(hProc, (LPCVOID)(itemAddr + Offsets::ItemType), &type, sizeof(uint8_t), nullptr);
+    props.type = static_cast<ItemType>(type);
     
-    props.addons[0].id = addon1ID;
-    props.addons[1].id = addon2ID;
+    uint8_t state;
+    ReadProcessMemory(hProc, (LPCVOID)(itemAddr + Offsets::ItemState), &state, sizeof(uint8_t), nullptr);
 }
