@@ -33,13 +33,17 @@ namespace Offsets {
 
 // Patterns for memory scanning
 namespace Patterns {
-    // More generic patterns that should work with bots
-    const BYTE PLAYER_BASE[] = "\x48\x89\x5C\x24\x00\x48\x89\x74\x24\x00\x57\x48\x83\xEC\x20\x48\x8B\xF1";
-    const char* PLAYER_MASK = "xxxx?xxxx?xxxxxxxx";
+    // Try to find UWorld first
+    const BYTE UWORLD[] = "\x48\x8B\x05\x00\x00\x00\x00\x48\x8B\x88\x00\x00\x00\x00\x48\x85\xC9\x74\x06\x48\x8B\x49\x70";
+    const char* UWORLD_MASK = "xxx????xxx????xxxxxxxxxx";
     
-    // Bot info pattern from ADBDPlayerState
-    const BYTE BOT_INFO[] = "\x48\x8B\x05\x00\x00\x00\x00\x48\x85\xC0\x74\x00\x48\x8B\x80\x00\x00\x00\x00";
-    const char* BOT_MASK = "xxx????xxxx?xxx????";
+    // Then GameState
+    const BYTE GAMESTATE[] = "\x48\x89\x5C\x24\x00\x48\x89\x74\x24\x00\x57\x48\x83\xEC\x20\x48\x8B\xD9\x41\x8B\xF0";
+    const char* GAMESTATE_MASK = "xxxx?xxxx?xxxxxxxxxxx";
+    
+    // Finally PlayerArray
+    const BYTE PLAYER_ARRAY[] = "\x48\x8B\x0D\x00\x00\x00\x00\x48\x8B\x01\x48\x8B\x40\x58";
+    const char* PLAYER_ARRAY_MASK = "xxx????xxxxxxx";
 }
 
 

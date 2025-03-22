@@ -126,25 +126,52 @@ int main() {
     uintptr_t base = GetModuleBaseAddress(pid, L"DeadByDaylight-Win64-Shipping.exe");
     std::cout << "[*] Scanning for players...\n";
 
-    std::cout << "[*] Scanning memory for patterns...\n";
+    std::cout << "[*] Scanning memory for UWorld...\n";
     
-    // Try to find player pattern with larger scan range
-    uintptr_t playerPattern = FindPattern(hProc, base, 0x10000000, 
-        (BYTE*)Patterns::PLAYER_BASE, Patterns::PLAYER_MASK);
+    // Find UWorld
+    uintptr_t uworldPattern = FindPattern(hProc, base, 0x10000000, 
+        (BYTE*)Patterns::UWORLD, Patterns::UWORLD_MASK);
     
-    if (!playerPattern) {
-        std::cout << "[-] Player pattern not found, trying bot pattern...\n";
-        playerPattern = FindPattern(hProc, base, 0x10000000,
-            (BYTE*)Patterns::BOT_INFO, Patterns::BOT_MASK);
-    }
-
-    if (!playerPattern) {
-        std::cout << "[-] No valid patterns found. Is the game in a match?\n";
+    if (!uworldPattern) {
+        std::cout << "[-] UWorld pattern not found.\n";
         CloseHandle(hProc);
         return 1;
     }
 
-    std::cout << "[+] Found valid pattern at: 0x" << std::hex << playerPattern << std::dec << "\n";
+    // Get UWorld pointer
+    int uworldOffset = 0;
+    ReadProcessMemory(hProc, (LPCVOID)(uworldPattern + 3), &uworldOffset, sizeof(int), nullptr);
+    uintptr_t uworld = uworldPattern + 7 + uworldOffset;
+    
+    std::cout << "[+] Found UWorld at: 0x" << std::hex << uworld << std::dec << "\n";
+    
+    // Find GameState
+    uintptr_t gameStatePtr = 0;
+    ReadProcessMemory(hProc, (LPCVOID)uworld, &gameStatePtr, sizeof(uintptr_t), nullptr);
+    
+    if (!gameStatePtr) {
+        std::cout << "[-] GameState not found.\n";
+        CloseHandle(hProc);
+        return 1;
+    }
+    
+    std::cout << "[+] Found GameState at: 0x" << std::hex << gameStatePtr << std::dec << "\n";
+    
+    // Find PlayerArray
+    uintptr_t playerArrayPattern = FindPattern(hProc, base, 0x10000000,
+        (BYTE*)Patterns::PLAYER_ARRAY, Patterns::PLAYER_ARRAY_MASK);
+        
+    if (!playerArrayPattern) {
+        std::cout << "[-] PlayerArray pattern not found.\n";
+        CloseHandle(hProc);
+        return 1;
+    }
+    
+    int playerArrayOffset = 0;
+    ReadProcessMemory(hProc, (LPCVOID)(playerArrayPattern + 3), &playerArrayOffset, sizeof(int), nullptr);
+    uintptr_t playerArray = playerArrayPattern + 7 + playerArrayOffset;
+    
+    std::cout << "[+] Found PlayerArray at: 0x" << std::hex << playerArray << std::dec << "\n";
 
     // Initialize DirectX overlay
     Overlay overlay;
@@ -162,24 +189,29 @@ int main() {
         while (running) {
             entityManager.Clear();
             
-            // Get player base
-            int relOffset = 0;
-            ReadProcessMemory(hProc, (LPCVOID)(playerPattern + 3), &relOffset, sizeof(int), nullptr);
-            uintptr_t playerBase = playerPattern + 7 + relOffset;
+            // Read player array
+            uintptr_t arrayPtr = 0;
+            ReadProcessMemory(hProc, (LPCVOID)playerArray, &arrayPtr, sizeof(uintptr_t), nullptr);
             
-            // Get base pointer
-            uintptr_t basePtr = 0;
-            ReadProcessMemory(hProc, (LPCVOID)playerBase, &basePtr, sizeof(uintptr_t), nullptr);
-            
-            if (basePtr) {
-                // Try to read up to 8 entities (including bots)
-                for (int i = 0; i < 8; i++) {
-                    uintptr_t entity = 0;
-                    ReadProcessMemory(hProc, (LPCVOID)(basePtr + i * sizeof(uintptr_t)), 
-                        &entity, sizeof(uintptr_t), nullptr);
-                    
-                    if (entity) {
-                        entityManager.UpdateEntity(hProc, entity);
+            if (arrayPtr) {
+                // Get array size
+                int32_t count = 0;
+                ReadProcessMemory(hProc, (LPCVOID)(arrayPtr + 0x8), &count, sizeof(int32_t), nullptr);
+                count = min(count, 8); // Limit to 8 players max
+                
+                // Read data pointer
+                uintptr_t dataPtr = 0;
+                ReadProcessMemory(hProc, (LPCVOID)(arrayPtr), &dataPtr, sizeof(uintptr_t), nullptr);
+                
+                if (dataPtr) {
+                    for (int i = 0; i < count; i++) {
+                        uintptr_t player = 0;
+                        ReadProcessMemory(hProc, (LPCVOID)(dataPtr + i * sizeof(uintptr_t)), 
+                            &player, sizeof(uintptr_t), nullptr);
+                            
+                        if (player) {
+                            entityManager.UpdateEntity(hProc, player);
+                        }
                     }
                 }
             }
