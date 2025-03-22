@@ -49,9 +49,9 @@ uintptr_t FindPattern(HANDLE hProc, uintptr_t start, size_t size, const BYTE* pa
 // Helper function to scan multiple patterns
 bool FindPatterns(HANDLE hProc, uintptr_t base, size_t scanSize, 
                  std::vector<std::pair<uintptr_t*, std::pair<const BYTE*, const char*>>>& patterns) {
-    for (auto& [resultPtr, patternPair] : patterns) {
-        *resultPtr = FindPattern(hProc, base, scanSize, patternPair.first, patternPair.second);
-        if (!*resultPtr) return false;
+    for (const auto& pattern : patterns) {
+        *pattern.first = FindPattern(hProc, base, scanSize, (BYTE*)pattern.second.first, pattern.second.second);
+        if (!*pattern.first) return false;
     }
     return true;
 }

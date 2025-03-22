@@ -47,9 +47,9 @@ int main() {
         
         // Try to find all patterns
         bool found = true;
-        for (auto& [resultPtr, patternPair] : patterns) {
-            *resultPtr = FindPattern(hProc, base, 0x5000000, patternPair.first, patternPair.second);
-            if (!*resultPtr) {
+        for (auto& pattern : patterns) {
+            *pattern.first = FindPattern(hProc, base, 0x5000000, (BYTE*)pattern.second.first, pattern.second.second);
+            if (!*pattern.first) {
                 found = false;
                 break;
             }
