@@ -4,6 +4,7 @@
 #include <DirectXMath.h>
 #include <vector>
 #include "types.h"
+#include "ui.h"
 
 #pragma comment(lib, "d3d11.lib")
 
@@ -12,7 +13,7 @@ using namespace DirectX;
 class Overlay {
 public:
     Overlay() : gameWindow(nullptr), pDevice(nullptr), pContext(nullptr), 
-                pSwapChain(nullptr), renderTarget(nullptr) {}
+                pSwapChain(nullptr), renderTarget(nullptr), ui() {}
     
     bool Init() {
         gameWindow = FindWindowA("DeadByDaylight", nullptr);
@@ -58,13 +59,16 @@ public:
 
     void BeginScene() {
         pContext->OMSetRenderTargets(1, &renderTarget, nullptr);
+        ui.BeginFrame();
     }
 
     void EndScene() {
+        ui.EndFrame();
         pSwapChain->Present(1, 0);
     }
 
-    void DrawBox(const Vector3& pos, float width, float height, D3DCOLOR color) {
+    void DrawBox(const Vector3& pos, float width, float height, D3DCOLOR color, bool enabled = true) {
+        if (!enabled) return;
         RECT windowRect;
         GetClientRect(gameWindow, &windowRect);
         
@@ -79,7 +83,8 @@ public:
         DrawLine(screenX - width/2, screenY + height/2, screenX - width/2, screenY - height/2, color);
     }
 
-    void DrawText(const Vector3& pos, const char* text, D3DCOLOR color) {
+    void DrawText(const Vector3& pos, const char* text, D3DCOLOR color, bool enabled = true) {
+        if (!enabled) return;
         RECT windowRect;
         GetClientRect(gameWindow, &windowRect);
         
@@ -89,6 +94,15 @@ public:
         // Create text layout and draw
         DrawTextA(screenX, screenY, text, color);
     }
+
+    void RenderUI(const std::vector<ESPEntity>& entities) {
+        ui.Render(entities);
+    }
+
+    UI& GetUI() { return ui; }
+    HWND GetWindow() const { return gameWindow; }
+    ID3D11Device* GetDevice() const { return pDevice; }
+    ID3D11DeviceContext* GetContext() const { return pContext; }
 
 private:
     void DrawLine(float x1, float y1, float x2, float y2, D3DCOLOR color) {
@@ -138,4 +152,5 @@ private:
     ID3D11DeviceContext* pContext;
     IDXGISwapChain* pSwapChain;
     ID3D11RenderTargetView* renderTarget;
+    UI ui;
 };
