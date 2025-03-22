@@ -1,4 +1,3 @@
-
 #include <Windows.h>
 #include <TlHelp32.h>
 #include <iostream>
@@ -13,7 +12,7 @@ struct Vector3 {
 };
 
 int main() {
-    DWORD pid = GetProcId(LL"DeadByDaylight-Win64-Shipping.exe");
+    DWORD pid = GetProcId(L"DeadByDaylight-Win64-Shipping.exe");
     if (!pid) {
         std::cout << "[-] Game not found.\n";
         return 1;

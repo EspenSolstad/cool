@@ -39,15 +39,18 @@ struct ItemData {
     float baseCharges;
     float maxCharges;
     float consumptionRate;
+
+    ItemData(ItemType t, const std::string& n, float base, float max, float rate) 
+        : type(t), name(n), baseCharges(base), maxCharges(max), consumptionRate(rate) {}
 };
 
-const std::map<ItemType, ItemData> ITEM_DATABASE = {
-    {ItemType::MEDKIT, {"Medkit", 24.0f, 32.0f, 1.0f}},
-    {ItemType::TOOLBOX, {"Toolbox", 16.0f, 32.0f, 1.0f}},
-    {ItemType::FLASHLIGHT, {"Flashlight", 8.0f, 12.0f, 1.0f}},
-    {ItemType::KEY, {"Key", 10.0f, 20.0f, 1.0f}},
-    {ItemType::MAP, {"Map", 20.0f, 30.0f, 1.0f}},
-    {ItemType::FIRECRACKER, {"Firecracker", 1.0f, 1.0f, 1.0f}}
+static std::map<ItemType, ItemData> ITEM_DATABASE = {
+    {ItemType::MEDKIT, ItemData(ItemType::MEDKIT, "Medkit", 24.0f, 32.0f, 1.0f)},
+    {ItemType::TOOLBOX, ItemData(ItemType::TOOLBOX, "Toolbox", 16.0f, 32.0f, 1.0f)},
+    {ItemType::FLASHLIGHT, ItemData(ItemType::FLASHLIGHT, "Flashlight", 8.0f, 12.0f, 1.0f)},
+    {ItemType::KEY, ItemData(ItemType::KEY, "Key", 10.0f, 20.0f, 1.0f)},
+    {ItemType::MAP, ItemData(ItemType::MAP, "Map", 20.0f, 30.0f, 1.0f)},
+    {ItemType::FIRECRACKER, ItemData(ItemType::FIRECRACKER, "Firecracker", 1.0f, 1.0f, 1.0f)}
 };
 
 struct ItemProperties {
@@ -78,15 +81,20 @@ public:
     };
 
     void UpdateItemState(uintptr_t player, const ItemProperties& props) {
-        trackedItems[player] = {props, false, props.remainingCharges, std::chrono::steady_clock::now()};
+        ActiveItem newItem;
+        newItem.properties = props;
+        newItem.isInUse = false;
+        newItem.lastCharges = props.remainingCharges;
+        newItem.lastUpdate = std::chrono::steady_clock::now();
+        trackedItems[player] = newItem;
     }
 
     void MonitorCharges(HANDLE hProc, uintptr_t itemAddr) {
         float charges;
         if (ReadProcessMemory(hProc, (LPCVOID)(itemAddr + Offsets::ItemCharges), &charges, sizeof(float), nullptr)) {
-            for (auto& [player, item] : trackedItems) {
-                if (item.lastCharges != charges) {
-                    item.UpdateCharges(charges);
+            for (auto& item : trackedItems) {
+                if (item.second.lastCharges != charges) {
+                    item.second.UpdateCharges(charges);
                 }
             }
         }
@@ -109,7 +117,4 @@ void ProcessAddons(HANDLE hProc, uintptr_t itemAddr, ItemProperties& props) {
     
     props.addons[0].id = addon1ID;
     props.addons[1].id = addon2ID;
-    
-    // Apply addon modifiers based on IDs
-    // This would be expanded with actual addon data
 }
