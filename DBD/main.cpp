@@ -7,9 +7,59 @@
 #include "memory.h"
 #include "offsets.h"
 #include "item.h"
+#include "overlay.h"
 
 struct Vector3 {
     float x, y, z;
+};
+
+bool VerifyComponent(HANDLE hProc, uintptr_t baseAddr, uintptr_t offset) {
+    uintptr_t component = 0;
+    if (!ReadProcessMemory(hProc, (LPCVOID)(baseAddr + offset), &component, sizeof(uintptr_t), nullptr)) {
+        return false;
+    }
+    return component != 0;
+}
+
+class EntityManager {
+public:
+    std::vector<ESPEntity> entities;
+    
+    void UpdateEntity(HANDLE hProc, uintptr_t address) {
+        if (!VerifyComponent(hProc, address, Offsets::RootComponent)) return;
+        
+        // Get position
+        uintptr_t rootComponent = 0;
+        ReadProcessMemory(hProc, (LPCVOID)(address + Offsets::RootComponent), 
+            &rootComponent, sizeof(uintptr_t), nullptr);
+        
+        Vector3 position;
+        ReadProcessMemory(hProc, (LPCVOID)(rootComponent + 0x1A0), 
+            &position, sizeof(Vector3), nullptr);
+            
+        // Check if killer
+        bool isKiller = false;
+        ReadProcessMemory(hProc, (LPCVOID)(address + Offsets::IsKiller),
+            &isKiller, sizeof(bool), nullptr);
+            
+        // Get health
+        int health = 0;
+        ReadProcessMemory(hProc, (LPCVOID)(address + Offsets::Health),
+            &health, sizeof(int), nullptr);
+            
+        ESPEntity entity;
+        entity.position = position;
+        entity.isKiller = isKiller;
+        entity.health = health;
+        entity.name = isKiller ? "KILLER" : "Survivor";
+        entity.color = isKiller ? Colors::Killer : Colors::Survivor;
+        
+        entities.push_back(entity);
+    }
+    
+    void Clear() {
+        entities.clear();
+    }
 };
 
 int main() {
@@ -28,112 +78,99 @@ int main() {
     std::cout << "[+] Game process found! PID: " << pid << "\n";
 
     uintptr_t base = GetModuleBaseAddress(pid, L"DeadByDaylight-Win64-Shipping.exe");
+    std::cout << "[*] Scanning for players...\n";
 
-    std::cout << "[*] Waiting for match to start...\n";
-    
-    uintptr_t entityListAddr = 0;
-    uintptr_t matchStateAddr = 0;
-    uintptr_t itemListAddr = 0;
-    const int MAX_ATTEMPTS = 30; // 30 seconds timeout
-    int attempts = 0;
-    
-    while (attempts < MAX_ATTEMPTS) {
-        // Create pattern scan list
-        std::vector<std::pair<uintptr_t*, std::pair<const BYTE*, const char*>>> patterns = {
-            {&entityListAddr, {Patterns::ENTITY_LIST, Patterns::ENTITY_MASK}},
-            {&matchStateAddr, {Patterns::MATCH_STATE, Patterns::MATCH_STATE_MASK}},
-            {&itemListAddr, {Patterns::ITEM_LIST, Patterns::ITEM_MASK}}
-        };
+    // Find player base pattern
+    uintptr_t playerPattern = FindPattern(hProc, base, 0x7000000, 
+        (BYTE*)Patterns::PLAYER_BASE, Patterns::PLAYER_MASK);
         
-        // Try to find all patterns
-        bool found = true;
-        for (auto& pattern : patterns) {
-            *pattern.first = FindPattern(hProc, base, 0x5000000, (BYTE*)pattern.second.first, pattern.second.second);
-            if (!*pattern.first) {
-                found = false;
-                break;
-            }
-        }
-        
-        if (found) {
-            std::cout << "\n[+] Match detected! All patterns found.\n";
-            break;
-        }
-        
-        Sleep(1000); // Wait 1 second between attempts
-        attempts++;
-        std::cout << "[*] Searching for match... " << attempts << "/" << MAX_ATTEMPTS << "\r";
-    }
-    
-    if (!entityListAddr || !matchStateAddr || !itemListAddr) {
-        std::cout << "\n[-] Could not find all required patterns. Are you in a match?\n";
-        std::cout << "[*] Tip: Start the program after entering a match\n";
+    // Find killer pattern
+    uintptr_t killerPattern = FindPattern(hProc, base, 0x7000000,
+        (BYTE*)Patterns::KILLER_BASE, Patterns::KILLER_MASK);
+
+    if (!playerPattern || !killerPattern) {
+        std::cout << "[-] Required patterns not found. Is the game running?\n";
         CloseHandle(hProc);
         return 1;
     }
 
-    int relOffset = 0;
-    ReadProcessMemory(hProc, (LPCVOID)(entityListAddr + 3), &relOffset, sizeof(int), 0);
+    // Initialize DirectX overlay
+    Overlay overlay;
+    if (!overlay.Init()) {
+        std::cout << "[-] Failed to initialize overlay.\n";
+        CloseHandle(hProc);
+        return 1;
+    }
 
-    uintptr_t entityListPtr = entityListAddr + 7 + relOffset;
-
-    std::cout << "[+] Entity list pointer resolved to: 0x" << std::hex << entityListPtr << "\n";
-
-    uintptr_t entityList = 0;
-    ReadProcessMemory(hProc, (LPCVOID)(entityListPtr), &entityList, sizeof(uintptr_t), 0);
-    std::cout << "[+] Entity list base address: 0x" << std::hex << entityList << "\n";
-
+    EntityManager entityManager;
     ItemTracker itemTracker;
     bool running = true;
 
     // Create monitoring thread
     std::thread monitorThread([&]() {
         while (running) {
-            for (int i = 0; i < 5; i++) {
-                uintptr_t entityAddress = 0;
-                ReadProcessMemory(hProc, (LPCVOID)(entityList + i * sizeof(uintptr_t)), &entityAddress, sizeof(uintptr_t), 0);
-
-                if (entityAddress) {
-                    Vector3 position;
-                    ReadProcessMemory(hProc, (LPCVOID)(entityAddress + 0x1A0), &position, sizeof(Vector3), 0);
-
-                    // Read item data
-                    uintptr_t itemAddr = entityAddress + Offsets::ItemBase;
-                    ItemProperties props;
-                    if (ReadProcessMemory(hProc, (LPCVOID)(itemAddr + Offsets::ItemProperties), &props, sizeof(ItemProperties), 0)) {
-                        if (props.type != ItemType::NONE) {
-                            // Process item addons
-                            ProcessAddons(hProc, itemAddr, props);
-                            
-                            // Update item state
-                            itemTracker.UpdateItemState(entityAddress, props);
-                            itemTracker.MonitorCharges(hProc, itemAddr);
-
-                            // Display item info
-                            std::cout << "\033[2J\033[H"; // Clear screen
-                            std::cout << "Entity " << std::dec << i << " Position: X:" << position.x 
-                                    << " Y:" << position.y << " Z:" << position.z << "\n";
-                            
-                            auto it = ITEM_DATABASE.find(props.type);
-                            if (it != ITEM_DATABASE.end()) {
-                                std::cout << "Item: " << it->second.name << "\n";
-                                std::cout << "Rarity: " << static_cast<int>(props.rarity) << "\n";
-                                std::cout << "Charges: " << props.remainingCharges << "/" << props.baseCharges << "\n";
-                                std::cout << "Addons: " << props.addons[0].id << ", " << props.addons[1].id << "\n";
-                            }
-                        }
-                    }
-                }
+            entityManager.Clear();
+            
+            // Get player base
+            int relOffset = 0;
+            ReadProcessMemory(hProc, (LPCVOID)(playerPattern + 3), &relOffset, sizeof(int), nullptr);
+            uintptr_t playerBase = playerPattern + 7 + relOffset;
+            
+            // Get killer base
+            ReadProcessMemory(hProc, (LPCVOID)(killerPattern + 3), &relOffset, sizeof(int), nullptr);
+            uintptr_t killerBase = killerPattern + 7 + relOffset;
+            
+            // Read and update entities
+            uintptr_t player = 0;
+            ReadProcessMemory(hProc, (LPCVOID)playerBase, &player, sizeof(uintptr_t), nullptr);
+            if (player) {
+                entityManager.UpdateEntity(hProc, player);
             }
-            Sleep(100); // Update every 100ms
+            
+            uintptr_t killer = 0;
+            ReadProcessMemory(hProc, (LPCVOID)killerBase, &killer, sizeof(uintptr_t), nullptr);
+            if (killer) {
+                entityManager.UpdateEntity(hProc, killer);
+            }
+            
+            Sleep(10); // Update every 10ms
         }
     });
 
-    std::cout << "Press Enter to exit...\n";
+    // Create render thread
+    std::thread renderThread([&]() {
+        while (running) {
+            overlay.BeginScene();
+            
+            // Render all entities
+            for (const auto& entity : entityManager.entities) {
+                // Draw box around entity
+                overlay.DrawBox(entity.position, 50.0f, 100.0f, entity.color);
+                
+                // Draw health bar
+                if (!entity.isKiller) {
+                    Vector3 healthPos = entity.position;
+                    healthPos.y += 60.0f; // Above the box
+                    overlay.DrawBox(healthPos, 50.0f * (entity.health / 100.0f), 5.0f, Colors::Health);
+                }
+                
+                // Draw name
+                Vector3 textPos = entity.position;
+                textPos.y -= 60.0f; // Below the box
+                overlay.DrawText(textPos, entity.name, entity.color);
+            }
+            
+            overlay.EndScene();
+            Sleep(16); // ~60 FPS
+        }
+    });
+
+    std::cout << "[+] ESP activated! Press Enter to exit...\n";
     std::cin.get();
     
     running = false;
     monitorThread.join();
+    renderThread.join();
     CloseHandle(hProc);
     return 0;
 }

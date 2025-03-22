@@ -3,19 +3,48 @@
 #include <Windows.h>
 #include <iostream>
 
-// Common patterns used for game state detection
+// Component offsets
+namespace Offsets {
+    // Base component offsets
+    constexpr auto RootComponent = 0x1A8;
+    constexpr auto Mesh = 0x328;
+    constexpr auto CharacterMovement = 0x330;
+    
+    // Player state offsets
+    constexpr auto PlayerState = 0x320;
+    constexpr auto Health = 0x334;
+    constexpr auto Team = 0x338;
+    constexpr auto IsKiller = 0x338;
+    constexpr auto KillerPower = 0x340;
+    constexpr auto KillerStunState = 0x348;
+    
+    // Item offsets
+    constexpr auto ItemBase = 0x2A8;
+    constexpr auto ItemProperties = 0x40;
+    constexpr auto ItemCharges = 0x58;
+    constexpr auto ItemAddon1 = 0x88;
+    constexpr auto ItemAddon2 = 0x90;
+    constexpr auto ItemRarity = 0x64;
+    constexpr auto ItemState = 0x70;
+}
+
+// Patterns for memory scanning
 namespace Patterns {
-    // Entity list pattern
-    const BYTE ENTITY_LIST[] = "\x48\x8B\x0D\x00\x00\x00\x00\x48\x85\xC9\x74\x3F";
-    const char* ENTITY_MASK = "xxx????xxxxx";
+    // Player patterns
+    const BYTE PLAYER_BASE[] = "\x48\x8B\x05\x00\x00\x00\x00\x48\x85\xC0\x74\x00\x48\x8B\x88";
+    const char* PLAYER_MASK = "xxx????xxxx?xxx";
     
-    // Match state pattern
-    const BYTE MATCH_STATE[] = "\x48\x83\xEC\x28\x48\x8B\x05\x00\x00\x00\x00\x48\x85\xC0\x74\x05";
-    const char* MATCH_STATE_MASK = "xxxxxxx????xxxxx";
-    
-    // Item list pattern
-    const BYTE ITEM_LIST[] = "\x48\x8B\x0D\x00\x00\x00\x00\x48\x8B\x01\x48\x8B\x40\x58";
-    const char* ITEM_MASK = "xxx????xxxxxxx";
+    // Killer patterns
+    const BYTE KILLER_BASE[] = "\x48\x8B\x05\x00\x00\x00\x00\x48\x85\xC0\x74\x00\x48\x8B\x40";
+    const char* KILLER_MASK = "xxx????xxxx?xxx";
+}
+
+// ESP Colors
+namespace Colors {
+    constexpr D3DCOLOR Survivor = D3DCOLOR_ARGB(255, 0, 255, 0);    // Green
+    constexpr D3DCOLOR Killer = D3DCOLOR_ARGB(255, 255, 0, 0);      // Red
+    constexpr D3DCOLOR Item = D3DCOLOR_ARGB(255, 255, 255, 0);      // Yellow
+    constexpr D3DCOLOR Health = D3DCOLOR_ARGB(255, 0, 255, 255);    // Cyan
 }
 
 // Pattern scanning for various game elements
