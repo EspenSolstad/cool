@@ -33,13 +33,13 @@ namespace Offsets {
 
 // Patterns for memory scanning
 namespace Patterns {
-    // Player patterns
-    const BYTE PLAYER_BASE[] = "\x48\x8B\x05\x00\x00\x00\x00\x48\x85\xC0\x74\x00\x48\x8B\x88";
-    const char* PLAYER_MASK = "xxx????xxxx?xxx";
+    // More generic patterns that should work with bots
+    const BYTE PLAYER_BASE[] = "\x48\x89\x5C\x24\x00\x48\x89\x74\x24\x00\x57\x48\x83\xEC\x20\x48\x8B\xF1";
+    const char* PLAYER_MASK = "xxxx?xxxx?xxxxxxxx";
     
-    // Killer patterns
-    const BYTE KILLER_BASE[] = "\x48\x8B\x05\x00\x00\x00\x00\x48\x85\xC0\x74\x00\x48\x8B\x40";
-    const char* KILLER_MASK = "xxx????xxxx?xxx";
+    // Bot info pattern from ADBDPlayerState
+    const BYTE BOT_INFO[] = "\x48\x8B\x05\x00\x00\x00\x00\x48\x85\xC0\x74\x00\x48\x8B\x80\x00\x00\x00\x00";
+    const char* BOT_MASK = "xxx????xxxx?xxx????";
 }
 
 

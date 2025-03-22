@@ -126,19 +126,25 @@ int main() {
     uintptr_t base = GetModuleBaseAddress(pid, L"DeadByDaylight-Win64-Shipping.exe");
     std::cout << "[*] Scanning for players...\n";
 
-    // Find player base pattern
-    uintptr_t playerPattern = FindPattern(hProc, base, 0x7000000, 
+    std::cout << "[*] Scanning memory for patterns...\n";
+    
+    // Try to find player pattern with larger scan range
+    uintptr_t playerPattern = FindPattern(hProc, base, 0x10000000, 
         (BYTE*)Patterns::PLAYER_BASE, Patterns::PLAYER_MASK);
-        
-    // Find killer pattern
-    uintptr_t killerPattern = FindPattern(hProc, base, 0x7000000,
-        (BYTE*)Patterns::KILLER_BASE, Patterns::KILLER_MASK);
+    
+    if (!playerPattern) {
+        std::cout << "[-] Player pattern not found, trying bot pattern...\n";
+        playerPattern = FindPattern(hProc, base, 0x10000000,
+            (BYTE*)Patterns::BOT_INFO, Patterns::BOT_MASK);
+    }
 
-    if (!playerPattern || !killerPattern) {
-        std::cout << "[-] Required patterns not found. Is the game running?\n";
+    if (!playerPattern) {
+        std::cout << "[-] No valid patterns found. Is the game in a match?\n";
         CloseHandle(hProc);
         return 1;
     }
+
+    std::cout << "[+] Found valid pattern at: 0x" << std::hex << playerPattern << std::dec << "\n";
 
     // Initialize DirectX overlay
     Overlay overlay;
@@ -161,21 +167,21 @@ int main() {
             ReadProcessMemory(hProc, (LPCVOID)(playerPattern + 3), &relOffset, sizeof(int), nullptr);
             uintptr_t playerBase = playerPattern + 7 + relOffset;
             
-            // Get killer base
-            ReadProcessMemory(hProc, (LPCVOID)(killerPattern + 3), &relOffset, sizeof(int), nullptr);
-            uintptr_t killerBase = killerPattern + 7 + relOffset;
+            // Get base pointer
+            uintptr_t basePtr = 0;
+            ReadProcessMemory(hProc, (LPCVOID)playerBase, &basePtr, sizeof(uintptr_t), nullptr);
             
-            // Read and update entities
-            uintptr_t player = 0;
-            ReadProcessMemory(hProc, (LPCVOID)playerBase, &player, sizeof(uintptr_t), nullptr);
-            if (player) {
-                entityManager.UpdateEntity(hProc, player);
-            }
-            
-            uintptr_t killer = 0;
-            ReadProcessMemory(hProc, (LPCVOID)killerBase, &killer, sizeof(uintptr_t), nullptr);
-            if (killer) {
-                entityManager.UpdateEntity(hProc, killer);
+            if (basePtr) {
+                // Try to read up to 8 entities (including bots)
+                for (int i = 0; i < 8; i++) {
+                    uintptr_t entity = 0;
+                    ReadProcessMemory(hProc, (LPCVOID)(basePtr + i * sizeof(uintptr_t)), 
+                        &entity, sizeof(uintptr_t), nullptr);
+                    
+                    if (entity) {
+                        entityManager.UpdateEntity(hProc, entity);
+                    }
+                }
             }
             
             Sleep(10); // Update every 10ms
