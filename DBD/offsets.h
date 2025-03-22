@@ -5,6 +5,55 @@
 #include <vector>
 #include "types.h"
 
+// Global engine offsets
+namespace Engine {
+    static constexpr uintptr_t GObjects = 0xa731510;
+    static constexpr uintptr_t GNames = 0xA66ECC0;
+    static constexpr uintptr_t GWorld = 0xA8C7160;
+    static constexpr uintptr_t PEOffset = 0x3B56050;
+}
+
+// UE4 structure offsets
+namespace UE4 {
+    // UStruct
+    static constexpr uintptr_t Children = 0x50;
+    static constexpr uintptr_t SuperStruct = 0x48;
+    static constexpr uintptr_t StructSize = 0x60;
+    static constexpr uintptr_t MinAlignment = 0x64;
+    
+    // UClass
+    static constexpr uintptr_t CastFlags = 0xE0;
+    static constexpr uintptr_t ClassDefaultObject = 0x120;
+    
+    // UFunction
+    static constexpr uintptr_t FunctionFlags = 0xB8;
+    static constexpr uintptr_t ExecFunction = 0xE0;
+    
+    // Property System
+    static constexpr uintptr_t ChildProperties = 0x58;
+    static constexpr uintptr_t FieldNext = 0x20;
+    static constexpr uintptr_t FieldName = 0x28;
+    static constexpr uintptr_t FieldFlags = 0x34;
+    static constexpr uintptr_t PropertySize = 0x80;
+    
+    // Property specifics
+    static constexpr uintptr_t ElementSize = 0x3C;
+    static constexpr uintptr_t ArrayDim = 0x38;
+    static constexpr uintptr_t Offset_Internal = 0x4C;
+    static constexpr uintptr_t PropertyFlags = 0x40;
+    
+    // Container properties
+    static constexpr uintptr_t ArrayInner = 0x80;
+    static constexpr uintptr_t SetElement = 0x80;
+    static constexpr uintptr_t MapBase = 0x80;
+    
+    // Text handling
+    static constexpr uintptr_t TextSize = 0x18;
+    static constexpr uintptr_t TextDataOffset = 0x0;
+    static constexpr uintptr_t InTextDataStringOffset = 0x30;
+}
+
+// Game-specific offsets
 namespace Offsets {
     // From ADBDPlayer
     static constexpr uintptr_t CharacterInventory = 0xaf8;  // _characterInventoryComponent
@@ -33,17 +82,21 @@ namespace Offsets {
 
 // Patterns for memory scanning
 namespace Patterns {
-    // Try to find UWorld first
+    // Core engine patterns
     const BYTE UWORLD[] = "\x48\x8B\x05\x00\x00\x00\x00\x48\x8B\x88\x00\x00\x00\x00\x48\x85\xC9\x74\x06\x48\x8B\x49\x70";
     const char* UWORLD_MASK = "xxx????xxx????xxxxxxxxxx";
     
-    // Then GameState
+    // Game state patterns
     const BYTE GAMESTATE[] = "\x48\x89\x5C\x24\x00\x48\x89\x74\x24\x00\x57\x48\x83\xEC\x20\x48\x8B\xD9\x41\x8B\xF0";
     const char* GAMESTATE_MASK = "xxxx?xxxx?xxxxxxxxxxx";
     
-    // Finally PlayerArray
+    // Player patterns
     const BYTE PLAYER_ARRAY[] = "\x48\x8B\x0D\x00\x00\x00\x00\x48\x8B\x01\x48\x8B\x40\x58";
     const char* PLAYER_ARRAY_MASK = "xxx????xxxxxxx";
+    
+    // Level actors pattern
+    const BYTE LEVEL_ACTORS[] = "\x48\x8B\x89\x00\x00\x00\x00\x48\x85\xC9\x74\x06\x48\x8B\x01";
+    const char* LEVEL_ACTORS_MASK = "xxx????xxxxxxxx";
 }
 
 

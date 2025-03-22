@@ -39,13 +39,14 @@ public:
             
         bool isKiller = (role == 1); // 1 = Killer, 0 = Survivor
         
-        // Get root component for position
+        // Get root component for position using UE4 structure offsets
         uintptr_t rootComponent = 0;
-        ReadProcessMemory(hProc, (LPCVOID)(address + 0x1A8), &rootComponent, sizeof(uintptr_t), nullptr);
+        ReadProcessMemory(hProc, (LPCVOID)(address + UE4::Children), &rootComponent, sizeof(uintptr_t), nullptr);
         
         Vector3 position = {0, 0, 0};
         if (rootComponent) {
-            ReadProcessMemory(hProc, (LPCVOID)(rootComponent + 0x1A0), &position, sizeof(Vector3), nullptr);
+            // Get relative location from SceneComponent
+            ReadProcessMemory(hProc, (LPCVOID)(rootComponent + UE4::FieldNext), &position, sizeof(Vector3), nullptr);
         }
             
         // Get state
@@ -126,24 +127,37 @@ int main() {
     uintptr_t base = GetModuleBaseAddress(pid, L"DeadByDaylight-Win64-Shipping.exe");
     std::cout << "[*] Scanning for players...\n";
 
-    std::cout << "[*] Scanning memory for UWorld...\n";
+    std::cout << "[*] Scanning memory for patterns...\n";
     
-    // Find UWorld
+    // Find UWorld using both pattern and direct offset
+    uintptr_t uworld = base + Engine::GWorld;
     uintptr_t uworldPattern = FindPattern(hProc, base, 0x10000000, 
         (BYTE*)Patterns::UWORLD, Patterns::UWORLD_MASK);
     
     if (!uworldPattern) {
-        std::cout << "[-] UWorld pattern not found.\n";
-        CloseHandle(hProc);
-        return 1;
+        std::cout << "[!] UWorld pattern not found, using direct offset.\n";
+    } else {
+        // Verify pattern-based UWorld
+        int uworldOffset = 0;
+        ReadProcessMemory(hProc, (LPCVOID)(uworldPattern + 3), &uworldOffset, sizeof(int), nullptr);
+        uintptr_t patternUWorld = uworldPattern + 7 + uworldOffset;
+        
+        if (patternUWorld != uworld) {
+            std::cout << "[!] UWorld pattern mismatch, using direct offset.\n";
+        }
     }
-
-    // Get UWorld pointer
-    int uworldOffset = 0;
-    ReadProcessMemory(hProc, (LPCVOID)(uworldPattern + 3), &uworldOffset, sizeof(int), nullptr);
-    uintptr_t uworld = uworldPattern + 7 + uworldOffset;
     
-    std::cout << "[+] Found UWorld at: 0x" << std::hex << uworld << std::dec << "\n";
+    std::cout << "[+] Using UWorld at: 0x" << std::hex << uworld << std::dec << "\n";
+    
+    // Find ULevel actors pattern
+    uintptr_t levelActorsPattern = FindPattern(hProc, base, 0x10000000,
+        (BYTE*)Patterns::LEVEL_ACTORS, Patterns::LEVEL_ACTORS_MASK);
+        
+    if (!levelActorsPattern) {
+        std::cout << "[!] ULevel actors pattern not found.\n";
+    } else {
+        std::cout << "[+] Found ULevel actors pattern at: 0x" << std::hex << levelActorsPattern << std::dec << "\n";
+    }
     
     // Find GameState
     uintptr_t gameStatePtr = 0;
