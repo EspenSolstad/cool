@@ -4,16 +4,8 @@
 #include <map>
 #include <chrono>
 #include <unordered_map>
-
-namespace Offsets {
-    constexpr auto ItemBase = 0x2A8;
-    constexpr auto ItemProperties = 0x40;
-    constexpr auto ItemCharges = 0x58;
-    constexpr auto ItemAddon1 = 0x88;
-    constexpr auto ItemAddon2 = 0x90;
-    constexpr auto ItemRarity = 0x64;
-    constexpr auto ItemState = 0x70;
-}
+#include "types.h"
+#include "offsets.h"
 
 enum class ItemType {
     NONE = 0,
@@ -101,13 +93,6 @@ public:
     }
 
     std::unordered_map<uintptr_t, ActiveItem> trackedItems;
-};
-
-struct AddonEffect {
-    float chargeModifier;
-    float speedModifier;
-    bool grantsAura;
-    std::string description;
 };
 
 void ProcessAddons(HANDLE hProc, uintptr_t itemAddr, ItemProperties& props) {

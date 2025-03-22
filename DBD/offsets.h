@@ -5,29 +5,30 @@
 #include <vector>
 #include "types.h"
 
-// Component offsets
 namespace Offsets {
-    // Base component offsets
-    constexpr auto RootComponent = 0x1A8;
-    constexpr auto Mesh = 0x328;
-    constexpr auto CharacterMovement = 0x330;
+    // From ADBDPlayer
+    static constexpr uintptr_t CharacterInventory = 0xaf8;  // _characterInventoryComponent
+    static constexpr uintptr_t PlayerData = 0xb98;         // _playerData
+    static constexpr uintptr_t CarryingPlayer = 0xbf8;     // _carryingPlayer
+    static constexpr uintptr_t InteractingPlayer = 0xc08;  // _interactingPlayer
+    static constexpr uintptr_t CamperState = 0xb70;        // CurrentCamperState
     
-    // Player state offsets
-    constexpr auto PlayerState = 0x320;
-    constexpr auto Health = 0x334;
-    constexpr auto Team = 0x338;
-    constexpr auto IsKiller = 0x338;
-    constexpr auto KillerPower = 0x340;
-    constexpr auto KillerStunState = 0x348;
+    // From ACollectable
+    static constexpr uintptr_t ItemCount = 0x520;          // _itemCount
+    static constexpr uintptr_t ItemType = 0x548;           // _itemType
+    static constexpr uintptr_t ItemAddons = 0x500;         // _itemAddons array
+    static constexpr uintptr_t ItemState = 0x4f8;          // _state
+    static constexpr uintptr_t IsInUse = 0x54e;            // _isInUse
     
-    // Item offsets
-    constexpr auto ItemBase = 0x2A8;
-    constexpr auto ItemProperties = 0x40;
-    constexpr auto ItemCharges = 0x58;
-    constexpr auto ItemAddon1 = 0x88;
-    constexpr auto ItemAddon2 = 0x90;
-    constexpr auto ItemRarity = 0x64;
-    constexpr auto ItemState = 0x70;
+    // From ADBDPlayerState
+    static constexpr uintptr_t GameRole = 0x3fa;           // GameRole
+    static constexpr uintptr_t PlayerGameState = 0x4d0;    // OnPlayerGameStateChanged
+    static constexpr uintptr_t PlayerCustomization = 0x600; // _playerCustomization
+    
+    // From UItemAddon
+    static constexpr uintptr_t TokenCount = 0x2d4;         // _tokenCount
+    static constexpr uintptr_t MaxTokenCount = 0x2b4;      // _maxTokenCount
+    static constexpr uintptr_t BaseItem = 0x2dc;           // _baseItem
 }
 
 // Patterns for memory scanning

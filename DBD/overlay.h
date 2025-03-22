@@ -129,7 +129,7 @@ private:
         HDC hdc = GetDC(gameWindow);
         SetTextColor(hdc, RGB((color >> 16) & 0xFF, (color >> 8) & 0xFF, color & 0xFF));
         SetBkMode(hdc, TRANSPARENT);
-        TextOutA(hdc, (int)x, (int)y, text, strlen(text));
+        TextOutA(hdc, static_cast<int>(x), static_cast<int>(y), text, static_cast<int>(strlen(text)));
         ReleaseDC(gameWindow, hdc);
     }
 

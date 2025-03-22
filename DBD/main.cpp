@@ -23,33 +23,74 @@ public:
     std::vector<ESPEntity> entities;
     
     void UpdateEntity(HANDLE hProc, uintptr_t address) {
-        if (!VerifyComponent(hProc, address, Offsets::RootComponent)) return;
+        if (!address) return;
         
-        // Get position
-        uintptr_t rootComponent = 0;
-        ReadProcessMemory(hProc, (LPCVOID)(address + Offsets::RootComponent), 
-            &rootComponent, sizeof(uintptr_t), nullptr);
+        // Get player state
+        uintptr_t playerState = 0;
+        ReadProcessMemory(hProc, (LPCVOID)(address + Offsets::PlayerData), 
+            &playerState, sizeof(uintptr_t), nullptr);
+            
+        if (!playerState) return;
         
+        // Check role
+        uint8_t role = 0;
+        ReadProcessMemory(hProc, (LPCVOID)(playerState + Offsets::GameRole),
+            &role, sizeof(uint8_t), nullptr);
+            
+        bool isKiller = (role == 1); // 1 = Killer, 0 = Survivor
+        
+        // Get position from player
         Vector3 position;
-        ReadProcessMemory(hProc, (LPCVOID)(rootComponent + 0x1A0), 
+        ReadProcessMemory(hProc, (LPCVOID)(address + 0x1A0), 
             &position, sizeof(Vector3), nullptr);
             
-        // Check if killer
-        bool isKiller = false;
-        ReadProcessMemory(hProc, (LPCVOID)(address + Offsets::IsKiller),
-            &isKiller, sizeof(bool), nullptr);
+        // Get state
+        uint8_t camperState = 0;
+        if (!isKiller) {
+            ReadProcessMemory(hProc, (LPCVOID)(address + Offsets::CamperState),
+                &camperState, sizeof(uint8_t), nullptr);
+        }
+        
+        // Check if being carried
+        uintptr_t carryingPlayer = 0;
+        ReadProcessMemory(hProc, (LPCVOID)(address + Offsets::CarryingPlayer),
+            &carryingPlayer, sizeof(uintptr_t), nullptr);
             
-        // Get health
-        int health = 0;
-        ReadProcessMemory(hProc, (LPCVOID)(address + Offsets::Health),
-            &health, sizeof(int), nullptr);
+        // Get item info if survivor
+        std::string itemName = "None";
+        if (!isKiller) {
+            uintptr_t inventory = 0;
+            ReadProcessMemory(hProc, (LPCVOID)(address + Offsets::CharacterInventory),
+                &inventory, sizeof(uintptr_t), nullptr);
+                
+            if (inventory) {
+                uintptr_t currentItem = 0;
+                ReadProcessMemory(hProc, (LPCVOID)(inventory + 0x1A0), // Offset to current item
+                    &currentItem, sizeof(uintptr_t), nullptr);
+                    
+                if (currentItem) {
+                    uint8_t itemType = 0;
+                    ReadProcessMemory(hProc, (LPCVOID)(currentItem + Offsets::ItemType),
+                        &itemType, sizeof(uint8_t), nullptr);
+                        
+                    switch(itemType) {
+                        case 0: itemName = "Medkit"; break;
+                        case 1: itemName = "Flashlight"; break;
+                        case 2: itemName = "Toolbox"; break;
+                        case 3: itemName = "Map"; break;
+                        case 4: itemName = "Key"; break;
+                    }
+                }
+            }
+        }
             
         ESPEntity entity;
         entity.position = position;
         entity.isKiller = isKiller;
-        entity.health = health;
-        entity.name = isKiller ? "KILLER" : "Survivor";
-        entity.color = isKiller ? Colors::Killer : Colors::Survivor;
+        entity.health = (camperState == 0) ? 100 : (camperState == 1) ? 50 : 0; // 0=Healthy, 1=Injured, 2=Dying
+        entity.name = isKiller ? "KILLER" : ("Survivor - " + itemName).c_str();
+        entity.color = isKiller ? Colors::Killer : 
+                      (carryingPlayer ? Colors::Health : Colors::Survivor);
         
         entities.push_back(entity);
     }
@@ -150,7 +191,7 @@ int main() {
                     overlay.DrawBox(healthPos, 50.0f * (entity.health / 100.0f), 5.0f, Colors::Health);
                 }
                 
-                // Draw name
+                // Draw name and item
                 Vector3 textPos = entity.position;
                 textPos.y -= 60.0f; // Below the box
                 overlay.DrawText(textPos, entity.name, entity.color);
