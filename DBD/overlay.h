@@ -3,19 +3,11 @@
 #include <d3d11.h>
 #include <DirectXMath.h>
 #include <vector>
-#include "offsets.h"
+#include "types.h"
 
 #pragma comment(lib, "d3d11.lib")
 
 using namespace DirectX;
-
-struct ESPEntity {
-    Vector3 position;
-    bool isKiller;
-    int health;
-    const char* name;
-    D3DCOLOR color;
-};
 
 class Overlay {
 public:
@@ -72,13 +64,11 @@ public:
         pSwapChain->Present(1, 0);
     }
 
-    void DrawBox(Vector3 pos, float width, float height, D3DCOLOR color) {
-        // Convert world position to screen position
-        XMVECTOR worldPos = XMVectorSet(pos.x, pos.y, pos.z, 1.0f);
+    void DrawBox(const Vector3& pos, float width, float height, D3DCOLOR color) {
         RECT windowRect;
         GetClientRect(gameWindow, &windowRect);
         
-        // Simple perspective projection (you'd need to get actual game view matrix)
+        // World to screen conversion
         float screenX = (pos.x / pos.z) * windowRect.right + windowRect.right/2;
         float screenY = (pos.y / pos.z) * windowRect.bottom + windowRect.bottom/2;
         
@@ -89,21 +79,58 @@ public:
         DrawLine(screenX - width/2, screenY + height/2, screenX - width/2, screenY - height/2, color);
     }
 
-    void DrawText(Vector3 pos, const char* text, D3DCOLOR color) {
-        // Convert world position to screen position (similar to DrawBox)
+    void DrawText(const Vector3& pos, const char* text, D3DCOLOR color) {
         RECT windowRect;
         GetClientRect(gameWindow, &windowRect);
         
         float screenX = (pos.x / pos.z) * windowRect.right + windowRect.right/2;
         float screenY = (pos.y / pos.z) * windowRect.bottom + windowRect.bottom/2;
         
-        // Draw text at screen position
-        // You'd implement actual text rendering here
+        // Create text layout and draw
+        DrawTextA(screenX, screenY, text, color);
     }
 
 private:
     void DrawLine(float x1, float y1, float x2, float y2, D3DCOLOR color) {
-        // Implement line drawing using ID3D11DeviceContext
+        // Create vertex buffer for line
+        ID3D11Buffer* vertexBuffer;
+        struct Vertex {
+            XMFLOAT3 pos;
+            D3DCOLOR color;
+        } vertices[] = {
+            {{x1, y1, 0.0f}, color},
+            {{x2, y2, 0.0f}, color}
+        };
+
+        D3D11_BUFFER_DESC bd;
+        ZeroMemory(&bd, sizeof(bd));
+        bd.Usage = D3D11_USAGE_DEFAULT;
+        bd.ByteWidth = sizeof(Vertex) * 2;
+        bd.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+
+        D3D11_SUBRESOURCE_DATA initData;
+        ZeroMemory(&initData, sizeof(initData));
+        initData.pSysMem = vertices;
+
+        pDevice->CreateBuffer(&bd, &initData, &vertexBuffer);
+        
+        // Draw line
+        UINT stride = sizeof(Vertex);
+        UINT offset = 0;
+        pContext->IASetVertexBuffers(0, 1, &vertexBuffer, &stride, &offset);
+        pContext->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_LINELIST);
+        pContext->Draw(2, 0);
+        
+        vertexBuffer->Release();
+    }
+
+    void DrawTextA(float x, float y, const char* text, D3DCOLOR color) {
+        // Simplified text rendering using GDI for now
+        HDC hdc = GetDC(gameWindow);
+        SetTextColor(hdc, RGB((color >> 16) & 0xFF, (color >> 8) & 0xFF, color & 0xFF));
+        SetBkMode(hdc, TRANSPARENT);
+        TextOutA(hdc, (int)x, (int)y, text, strlen(text));
+        ReleaseDC(gameWindow, hdc);
     }
 
     HWND gameWindow;

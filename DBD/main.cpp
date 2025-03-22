@@ -8,10 +8,7 @@
 #include "offsets.h"
 #include "item.h"
 #include "overlay.h"
-
-struct Vector3 {
-    float x, y, z;
-};
+#include "types.h"
 
 bool VerifyComponent(HANDLE hProc, uintptr_t baseAddr, uintptr_t offset) {
     uintptr_t component = 0;
@@ -103,7 +100,6 @@ int main() {
     }
 
     EntityManager entityManager;
-    ItemTracker itemTracker;
     bool running = true;
 
     // Create monitoring thread

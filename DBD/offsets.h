@@ -2,6 +2,8 @@
 #pragma once
 #include <Windows.h>
 #include <iostream>
+#include <vector>
+#include "types.h"
 
 // Component offsets
 namespace Offsets {
@@ -39,13 +41,6 @@ namespace Patterns {
     const char* KILLER_MASK = "xxx????xxxx?xxx";
 }
 
-// ESP Colors
-namespace Colors {
-    constexpr D3DCOLOR Survivor = D3DCOLOR_ARGB(255, 0, 255, 0);    // Green
-    constexpr D3DCOLOR Killer = D3DCOLOR_ARGB(255, 255, 0, 0);      // Red
-    constexpr D3DCOLOR Item = D3DCOLOR_ARGB(255, 255, 255, 0);      // Yellow
-    constexpr D3DCOLOR Health = D3DCOLOR_ARGB(255, 0, 255, 255);    // Cyan
-}
 
 // Pattern scanning for various game elements
 uintptr_t FindPattern(HANDLE hProc, uintptr_t start, size_t size, const BYTE* pattern, const char* mask) {
