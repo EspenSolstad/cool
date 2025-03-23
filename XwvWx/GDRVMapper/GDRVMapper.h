@@ -2,8 +2,8 @@
 #include <Windows.h>
 #include <string>
 #include <vector>
-#include <random>
-#include "GDRVTypes.h"
+#include <chrono>
+#include <thread>
 
 class GDRVMapper {
 public:
@@ -31,41 +31,25 @@ private:
     uint64_t lastAllocationEnd;
     uint64_t kernelBase;
     uint64_t kernelSize;
+    uint64_t cachedWritableAddr;
     
     // Memory operations
     bool ReadPhysicalMemory(uint64_t physAddress, void* buffer, size_t size);
     bool WritePhysicalMemory(uint64_t physAddress, const void* buffer, size_t size, bool strictValidation = true);
-    bool WriteShellcodeIncrementally(uint64_t baseAddress, const std::vector<uint8_t>& shellcode, bool obfuscate = true);
+    bool WriteShellcodeIncrementally(uint64_t baseAddress, const void* shellcode, size_t size);
     
     // Driver mapping helpers
     bool MapDriverWithExecPatch(const std::string& driverPath, uint64_t& baseAddress);
     bool ExecuteKernelShellcode(const void* shellcode, size_t size, uint64_t* result = nullptr);
-    bool ExecuteObfuscatedShellcode(uint64_t baseAddress, const ObfuscatedShellcode& shellcode, uint64_t* result = nullptr);
     
     // Memory search helpers
     uint64_t FindGDRVWritableMemory();
-    uint64_t FindModuleWritableMemory();
     uint64_t TryWritableRegion(uint64_t startAddr);
-    uint64_t cachedWritableAddr;
-    
-    struct MemoryRegion {
-        uint64_t address;
-        size_t size;
-        bool isExecutable;
-        bool isWritable;
-        std::string source;  // e.g., "GDRV", "Module", etc.
-    };
-    std::vector<MemoryRegion> writableRegions;
 
     // Memory constants
     static constexpr uint64_t PAGE_SIZE = 0x1000;
     static constexpr uint64_t ALLOCATION_GRANULARITY = 0x10000;
     static constexpr uint64_t MAX_SEARCH_RANGE = 0x1000000;  // 16MB search range
-    static constexpr uint64_t WRITE_DELAY_US = 100;  // Microseconds between writes
-    
-    // Helper functions
-    std::vector<uint64_t> GenerateRandomizedOffsets(uint64_t start, uint64_t end, uint64_t step);
-    bool IsModuleExcluded(const std::string& modulePath);
-    bool ValidateMemoryWrite(uint64_t address, const void* buffer, size_t size);
-    void CacheWritableRegion(uint64_t address, size_t size, const std::string& source);
+    static constexpr uint64_t WRITE_CHUNK_SIZE = 8;  // Write shellcode in 8-byte chunks
+    static constexpr uint64_t WRITE_DELAY_US = 100;  // 100 microseconds between writes
 };
