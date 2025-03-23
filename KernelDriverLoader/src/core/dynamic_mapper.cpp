@@ -3,7 +3,7 @@
 #include <chrono>
 
 // Global instance for easier access - defined in main.cpp
-extern std::unique_ptr<DynamicMapper> g_dynamicMapper;
+extern std::unique_ptr<DynamicMapper, std::default_delete<DynamicMapper>> g_dynamicMapper;
 
 // Internal implementation structure
 struct DynamicMapper::MappingContext {

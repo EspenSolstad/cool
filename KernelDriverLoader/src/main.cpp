@@ -19,9 +19,9 @@
 #include "../resources/resource.h"
 
 // Global instances
-std::unique_ptr<IntelDriver> g_intelDriver;
-std::unique_ptr<KDMapper> g_kdMapper;
-std::unique_ptr<DynamicMapper> g_dynamicMapper;
+std::unique_ptr<IntelDriver, std::default_delete<IntelDriver>> g_intelDriver;
+std::unique_ptr<KDMapper, std::default_delete<KDMapper>> g_kdMapper;
+std::unique_ptr<DynamicMapper, std::default_delete<DynamicMapper>> g_dynamicMapper;
 
 // Print application banner
 void PrintBanner() {

@@ -2,7 +2,7 @@
 #include "../../resources/resource.h"
 
 // Global instance
-std::unique_ptr<IntelDriver> g_intelDriver;
+std::unique_ptr<IntelDriver, std::default_delete<IntelDriver>> g_intelDriver;
 
 // Constructor
 IntelDriver::IntelDriver() 

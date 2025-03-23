@@ -2,8 +2,8 @@
 #include <random>
 
 // External references to global instances
-extern std::unique_ptr<KDMapper> g_kdMapper;
-extern std::unique_ptr<IntelDriver> g_intelDriver;
+extern std::unique_ptr<KDMapper, std::default_delete<KDMapper>> g_kdMapper;
+extern std::unique_ptr<IntelDriver, std::default_delete<IntelDriver>> g_intelDriver;
 
 // Static instance for singleton
 KernelBridge& KernelBridge::GetInstance() {
