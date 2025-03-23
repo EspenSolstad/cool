@@ -1,12 +1,27 @@
 #include <Windows.h>
 #include <iostream>
 #include <string>
+#include <memory>
+#include <vector>
+#include <filesystem>
+#include <fstream>
 #include <conio.h>
 #include <shlobj.h>
 #include <limits>
+#include <algorithm>
 #include "../includes/utils/logging.hpp"
-#include "../includes/core/driver_manager.hpp"
+#include "../includes/utils/resource_utils.hpp"
+#include "../includes/utils/intel_driver.hpp"
+#include "../includes/utils/kdmapper.hpp"
+#include "../includes/core/secure_loader.hpp"
+#include "../includes/core/dynamic_mapper.hpp"
+#include "../includes/core/kernel_bridge.hpp"
 #include "../resources/resource.h"
+
+// Global instances
+std::unique_ptr<IntelDriver> g_intelDriver;
+std::unique_ptr<KDMapper> g_kdMapper;
+std::unique_ptr<DynamicMapper> g_dynamicMapper;
 
 // Print application banner
 void PrintBanner() {
@@ -15,6 +30,81 @@ void PrintBanner() {
     std::cout << "          Kernel Driver Loader v1.0.0              " << std::endl;
     std::cout << "===================================================" << std::endl;
     std::cout << std::endl;
+}
+
+// Initialize the application
+bool Initialize() {
+    // Initialize the Intel driver
+    g_intelDriver = std::make_unique<IntelDriver>();
+    if (g_intelDriver == nullptr) {
+        Logger::LogError("Failed to create Intel driver instance");
+        return false;
+    }
+
+    // Load the Intel driver
+    if (g_intelDriver->Load() == false) {
+        Logger::LogError("Failed to load Intel driver");
+        return false;
+    }
+
+    Logger::LogInfo("Intel driver loaded successfully");
+
+    // Initialize the KDMapper
+    g_kdMapper = std::make_unique<KDMapper>(g_intelDriver.get());
+    if (g_kdMapper == nullptr) {
+        Logger::LogError("Failed to create KDMapper instance");
+        return false;
+    }
+
+    Logger::LogInfo("KDMapper initialized successfully");
+
+    // Initialize the Dynamic Mapper
+    g_dynamicMapper = std::make_unique<DynamicMapper>();
+    if (g_dynamicMapper == nullptr) {
+        Logger::LogError("Failed to create Dynamic Mapper instance");
+        return false;
+    }
+
+    Logger::LogInfo("Dynamic Mapper initialized successfully");
+
+    return true;
+}
+
+// Cleanup resources
+void Cleanup() {
+    // Clean up in reverse order of initialization
+    
+    Logger::LogInfo("Cleaning up resources...");
+    
+    // Unmap any loaded drivers
+    if (g_dynamicMapper != nullptr && g_dynamicMapper->IsDriverMapped()) {
+        if (g_dynamicMapper->UnmapDriver()) {
+            Logger::LogInfo("Dynamic driver unmapped successfully");
+        }
+        else {
+            Logger::LogWarning("Failed to unmap dynamic driver");
+        }
+    }
+    
+    // Release Dynamic Mapper
+    g_dynamicMapper.reset();
+    
+    // Release KDMapper
+    g_kdMapper.reset();
+    
+    // Unload the Intel driver
+    if (g_intelDriver != nullptr) {
+        if (g_intelDriver->Unload()) {
+            Logger::LogInfo("Intel driver unloaded successfully");
+        }
+        else {
+            Logger::LogWarning("Failed to unload Intel driver");
+        }
+        
+        g_intelDriver.reset();
+    }
+    
+    Logger::LogInfo("Cleanup completed");
 }
 
 // Display menu
@@ -28,6 +118,128 @@ void DisplayMenu() {
     std::cout << "6. Unmap driver" << std::endl;
     std::cout << "7. Exit" << std::endl;
     std::cout << "Enter your choice: ";
+}
+
+// Handle Intel driver mapping
+bool MapIntelDriver() {
+    Logger::LogInfo("Mapping Intel driver...");
+    
+    uint64_t driverBase = 0;
+    if (g_kdMapper->MapDriverFromResource(DRIVER_INTEL_RESOURCE, &driverBase)) {
+        Logger::LogInfo("Intel driver mapped successfully at 0x{:X}", driverBase);
+        return true;
+    }
+    else {
+        Logger::LogError("Failed to map Intel driver: {}", g_kdMapper->GetLastErrorMessage());
+        return false;
+    }
+}
+
+// Handle RwDrv driver mapping
+bool MapRwDrvDriver() {
+    Logger::LogInfo("Mapping RwDrv driver...");
+    
+    uint64_t driverBase = 0;
+    if (g_kdMapper->MapDriverFromResource(DRIVER_RWDRV_RESOURCE, &driverBase)) {
+        Logger::LogInfo("RwDrv driver mapped successfully at 0x{:X}", driverBase);
+        return true;
+    }
+    else {
+        Logger::LogError("Failed to map RwDrv driver: {}", g_kdMapper->GetLastErrorMessage());
+        return false;
+    }
+}
+
+// Handle MemDriver mapping
+bool MapMemDriver() {
+    Logger::LogInfo("Mapping MemDriver...");
+    
+    uint64_t driverBase = 0;
+    if (g_kdMapper->MapDriverFromResource(DRIVER_MAPPER_RESOURCE, &driverBase)) {
+        Logger::LogInfo("MemDriver mapped successfully at 0x{:X}", driverBase);
+        return true;
+    }
+    else {
+        Logger::LogError("Failed to map MemDriver: {}", g_kdMapper->GetLastErrorMessage());
+        return false;
+    }
+}
+
+// Handle Cheat driver mapping
+bool MapCheatDriver() {
+    Logger::LogInfo("Mapping Cheat driver...");
+    
+    uint64_t driverBase = 0;
+    if (g_kdMapper->MapDriverFromResource(DRIVER_CHEAT_RESOURCE, &driverBase)) {
+        Logger::LogInfo("Cheat driver mapped successfully at 0x{:X}", driverBase);
+        return true;
+    }
+    else {
+        Logger::LogError("Failed to map Cheat driver: {}", g_kdMapper->GetLastErrorMessage());
+        return false;
+    }
+}
+
+// Handle custom driver mapping
+bool MapCustomDriver() {
+    std::string driverPath;
+    std::cout << "Enter driver path: ";
+    std::cin >> driverPath;
+    
+    if (std::filesystem::exists(driverPath) == false) {
+        Logger::LogError("Driver file not found: {}", driverPath);
+        return false;
+    }
+    
+    Logger::LogInfo("Mapping custom driver: {}", driverPath);
+    
+    // Read the driver file
+    std::ifstream file(driverPath, std::ios::binary);
+    if (file.is_open() == false) {
+        Logger::LogError("Failed to open driver file: {}", driverPath);
+        return false;
+    }
+    
+    // Get file size
+    file.seekg(0, std::ios::end);
+    size_t fileSize = file.tellg();
+    file.seekg(0, std::ios::beg);
+    
+    // Read the file data
+    std::vector<uint8_t> driverData(fileSize);
+    file.read(reinterpret_cast<char*>(driverData.data()), fileSize);
+    file.close();
+    
+    // Map the driver
+    uint64_t driverBase = 0;
+    if (g_kdMapper->MapDriver(driverData.data(), driverData.size(), &driverBase)) {
+        Logger::LogInfo("Custom driver mapped successfully at 0x{:X}", driverBase);
+        return true;
+    }
+    else {
+        Logger::LogError("Failed to map custom driver: {}", g_kdMapper->GetLastErrorMessage());
+        return false;
+    }
+}
+
+// Handle driver unmapping
+bool UnmapDriver() {
+    if (g_dynamicMapper->IsDriverMapped() == false) {
+        Logger::LogWarning("No driver is currently mapped");
+        return false;
+    }
+    
+    uint64_t driverBase = g_dynamicMapper->GetMappedDriverBase();
+    Logger::LogInfo("Unmapping driver at 0x{:X}...", driverBase);
+    
+    if (g_dynamicMapper->UnmapDriver()) {
+        Logger::LogInfo("Driver unmapped successfully");
+        return true;
+    }
+    else {
+        Logger::LogError("Failed to unmap driver: {}", g_dynamicMapper->GetLastErrorMessage());
+        return false;
+    }
 }
 
 // Main application function
@@ -49,13 +261,12 @@ int main() {
         return 1;
     }
     
-    // Get the driver manager and initialize it
-    DriverManager& driverManager = GetDriverManager();
-    if (driverManager.Initialize() == false) {
+    // Initialize the application
+    if (Initialize() == false) {
         Logger::LogCritical("Failed to initialize application");
         std::cout << "Press any key to exit..." << std::endl;
         (void)_getch();
-        driverManager.Cleanup();
+        Cleanup();
         return 1;
     }
     
@@ -69,27 +280,22 @@ int main() {
         
         switch (choice) {
         case 1:
-            driverManager.MapIntelDriver();
+            MapIntelDriver();
             break;
         case 2:
-            driverManager.MapRwDrvDriver();
+            MapRwDrvDriver();
             break;
         case 3:
-            driverManager.MapMemDriver();
+            MapMemDriver();
             break;
         case 4:
-            driverManager.MapCheatDriver();
+            MapCheatDriver();
             break;
         case 5:
-            {
-                std::string driverPath;
-                std::cout << "Enter driver path: ";
-                std::cin >> driverPath;
-                driverManager.MapCustomDriver(driverPath);
-            }
+            MapCustomDriver();
             break;
         case 6:
-            driverManager.UnmapDriver();
+            UnmapDriver();
             break;
         case 7:
             running = false;
@@ -108,7 +314,7 @@ int main() {
     }
     
     // Clean up resources
-    driverManager.Cleanup();
+    Cleanup();
     
     return 0;
 }

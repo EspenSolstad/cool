@@ -2,6 +2,9 @@
 #include <random>
 #include <chrono>
 
+// Global instance for easier access - defined in main.cpp
+extern std::unique_ptr<DynamicMapper> g_dynamicMapper;
+
 // Internal implementation structure
 struct DynamicMapper::MappingContext {
     // Mapping information
@@ -17,24 +20,20 @@ struct DynamicMapper::MappingContext {
     bool isMemoryHidden;
     bool isHeadersObfuscated;
     
-    // KDMapper instance (not owned)
-    KDMapper* kdMapper;
-    
-    MappingContext(KDMapper* mapper)
+    MappingContext()
         : sourceBuffer(nullptr),
           sourceSize(0),
           driverName(""),
           driverVersion(""),
           isProtected(false),
           isMemoryHidden(false),
-          isHeadersObfuscated(false),
-          kdMapper(mapper) {
+          isHeadersObfuscated(false) {
     }
 };
 
 // Constructor
 DynamicMapper::DynamicMapper()
-    : m_context(std::make_unique<MappingContext>(nullptr)),
+    : m_context(std::make_unique<MappingContext>()),
       m_lastErrorMessage(""),
       m_mappedDriverBase(0),
       m_mappedDriverSize(0),
@@ -67,15 +66,15 @@ bool DynamicMapper::MapDriver(const void* driverData, size_t size, uint64_t* pOu
     }
     
     // Use KDMapper to do the actual mapping
-    if (m_context->kdMapper == nullptr) {
+    if (g_kdMapper == nullptr) {
         SetLastError("KDMapper not initialized");
         return false;
     }
     
     // Map the driver
     uint64_t driverBase = 0;
-    if (m_context->kdMapper->MapDriver(const_cast<void*>(driverData), size, &driverBase) == false) {
-        SetLastError("KDMapper failed to map driver: " + m_context->kdMapper->GetLastErrorMessage());
+    if (g_kdMapper->MapDriver(const_cast<void*>(driverData), size, &driverBase) == false) {
+        SetLastError("KDMapper failed to map driver: " + g_kdMapper->GetLastErrorMessage());
         return false;
     }
     
@@ -117,14 +116,14 @@ bool DynamicMapper::UnmapDriver() {
     RemoveTraces();
     
     // Use KDMapper to do the actual unmapping
-    if (m_context->kdMapper == nullptr) {
+    if (g_kdMapper == nullptr) {
         SetLastError("KDMapper not initialized");
         return false;
     }
     
     // Unmap the driver
-    if (m_context->kdMapper->UnmapDriver(m_mappedDriverBase) == false) {
-        SetLastError("KDMapper failed to unmap driver: " + m_context->kdMapper->GetLastErrorMessage());
+    if (g_kdMapper->UnmapDriver(m_mappedDriverBase) == false) {
+        SetLastError("KDMapper failed to unmap driver: " + g_kdMapper->GetLastErrorMessage());
         return false;
     }
     
@@ -223,13 +222,6 @@ size_t DynamicMapper::GetMappedDriverSize() const {
 // Get the last error message
 std::string DynamicMapper::GetLastErrorMessage() const {
     return m_lastErrorMessage;
-}
-
-// Set the KDMapper instance to use
-void DynamicMapper::SetKDMapper(KDMapper* kdMapper) {
-    if (m_context) {
-        m_context->kdMapper = kdMapper;
-    }
 }
 
 // Setup the mapping
