@@ -1,6 +1,7 @@
-#include "secure_loader.hpp"
-#include "intel_driver.hpp"
-#include "kdmapper.hpp"
+#include "core/secure_loader.hpp"
+#include "utils/intel_driver.hpp"
+#include "utils/kdmapper.hpp"
+#include "utils/logging.hpp"
 #include <algorithm>
 #include <random>
 #include <chrono>
@@ -69,6 +70,7 @@ bool SecureDriverLoader::DecryptDriver(const std::vector<uint8_t>& encrypted, st
 
 bool SecureDriverLoader::LoadDriver(const void* driver_data, size_t size) {
     if (!VerifyDriverIntegrity(driver_data, size)) {
+        LOG_ERROR("Driver integrity check failed");
         return false;
     }
 
@@ -78,12 +80,14 @@ bool SecureDriverLoader::LoadDriver(const void* driver_data, size_t size) {
     // Allocate secure memory for decrypted driver
     void* secure_buffer = SecureMemory::AllocateSecure(size);
     if (!secure_buffer) {
+        LOG_ERROR("Failed to allocate secure memory");
         return false;
     }
     
     std::vector<uint8_t> decrypted;
     if (!DecryptDriver(impl->encrypted_driver, decrypted)) {
         SecureMemory::FreeSecure(secure_buffer, size);
+        LOG_ERROR("Failed to decrypt driver");
         return false;
     }
     
@@ -94,6 +98,7 @@ bool SecureDriverLoader::LoadDriver(const void* driver_data, size_t size) {
     HANDLE dev = intel_driver::Load();
     if (dev == INVALID_HANDLE_VALUE) {
         SecureMemory::FreeSecure(secure_buffer, size);
+        LOG_ERROR("Failed to load intel driver");
         return false;
     }
     
@@ -106,6 +111,7 @@ bool SecureDriverLoader::LoadDriver(const void* driver_data, size_t size) {
     
     if (!mapped) {
         intel_driver::Unload(dev);
+        LOG_ERROR("Failed to map driver");
         return false;
     }
     
@@ -152,12 +158,14 @@ void SecureDriverLoader::CleanupTraces() {
 
 bool SecureDriverLoader::VerifyDriverIntegrity(const void* driver_data, size_t size) {
     if (!driver_data || !size) {
+        LOG_ERROR("Invalid driver data");
         return false;
     }
     
     // Verify PE headers
     const IMAGE_DOS_HEADER* dos_header = static_cast<const IMAGE_DOS_HEADER*>(driver_data);
     if (dos_header->e_magic != IMAGE_DOS_SIGNATURE) {
+        LOG_ERROR("Invalid DOS signature");
         return false;
     }
     
@@ -165,10 +173,9 @@ bool SecureDriverLoader::VerifyDriverIntegrity(const void* driver_data, size_t s
         reinterpret_cast<const uint8_t*>(driver_data) + dos_header->e_lfanew);
     
     if (nt_headers->Signature != IMAGE_NT_SIGNATURE) {
+        LOG_ERROR("Invalid NT signature");
         return false;
     }
-    
-    // Additional integrity checks can be added here
     
     return true;
 }
