@@ -285,7 +285,7 @@ int main(int argc, char* argv[]) {
     
     // Get current directory
     std::string currentDir = std::filesystem::current_path().string();
-    std::string memDriverPath = currentDir + "\\memdriver.sys";
+    std::string memDriverPath = currentDir + "\\yoo.sys";
     
     // Check if driver file exists
     if (!std::filesystem::exists(memDriverPath)) {

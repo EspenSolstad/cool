@@ -22,11 +22,19 @@ echo.
 REM Define paths
 set "CURRENT_DIR=%~dp0"
 set "GDRV_DRIVER=%CURRENT_DIR%drivers\gdrv.sys"
+set "MEMORY_DRIVER=%CURRENT_DIR%yoo.sys"
 
-REM Check if gdrv.sys exists
+REM Check if required drivers exist
 if not exist "%GDRV_DRIVER%" (
     echo [-] GDRV driver not found: %GDRV_DRIVER%
     echo [!] This driver is required for the exploit to work
+    pause
+    exit /b 1
+)
+
+if not exist "%MEMORY_DRIVER%" (
+    echo [-] Memory driver not found: %MEMORY_DRIVER%
+    echo [!] Please build the driver project first
     pause
     exit /b 1
 )
@@ -66,12 +74,12 @@ echo [+] GDRV driver loaded successfully!
 echo.
 
 REM Run the mapper
-echo [*] Running GDRV mapper...
+echo [*] Running GDRV mapper to load yoo.sys...
 if exist "GDRVMapper.exe" (
     GDRVMapper.exe
 ) else (
     echo [-] GDRVMapper.exe not found
-    echo [!] Please build GDRVMapper.cpp first
+    echo [!] Please build GDRVMapper project first
 )
 
 REM Clean up
