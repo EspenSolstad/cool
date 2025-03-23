@@ -1,6 +1,7 @@
 #include "core/dynamic_mapper.hpp"
 #include "utils/intel_driver.hpp"
 #include "utils/logging.hpp"
+#include "nt.hpp"
 #include <memory>
 
 struct DynamicMapper::MappingContext {
@@ -53,14 +54,14 @@ bool DynamicMapper::MapDriver(const void* driver_data, size_t size) {
 
     // Map the driver
     HANDLE dev = intel_driver::Load();
-    if (dev == INVALID_HANDLE_VALUE) {
+    if (!dev || dev == INVALID_HANDLE_VALUE) {
         LOG_ERROR("Failed to load intel driver");
         FreeSecureSection(secure_section);
         return false;
     }
 
     // Allocate kernel memory
-    context->mapped_base = reinterpret_cast<void*>(intel_driver::AllocatePool(dev, nt::NonPagedPool, size));
+    context->mapped_base = reinterpret_cast<void*>(intel_driver::AllocatePool(dev, nt::POOL_TYPE::NonPagedPool, size));
     if (!context->mapped_base) {
         LOG_ERROR("Failed to allocate kernel memory");
         intel_driver::Unload(dev);
@@ -69,7 +70,7 @@ bool DynamicMapper::MapDriver(const void* driver_data, size_t size) {
     }
 
     // Write to kernel memory
-    if (!intel_driver::WriteMemory(dev, reinterpret_cast<ULONGLONG>(context->mapped_base), secure_section, size)) {
+    if (!intel_driver::WriteMemory(dev, reinterpret_cast<ULONGLONG>(context->mapped_base), static_cast<void*>(secure_section), size)) {
         LOG_ERROR("Failed to write to kernel memory");
         intel_driver::FreePool(dev, reinterpret_cast<ULONGLONG>(context->mapped_base));
         intel_driver::Unload(dev);
@@ -104,7 +105,7 @@ bool DynamicMapper::UnmapDriver() {
     LOG_INFO("Unmapping driver...");
 
     HANDLE dev = intel_driver::Load();
-    if (dev == INVALID_HANDLE_VALUE) {
+    if (!dev || dev == INVALID_HANDLE_VALUE) {
         LOG_ERROR("Failed to load intel driver for unmapping");
         return false;
     }

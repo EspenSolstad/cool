@@ -1,6 +1,6 @@
 #include "core/secure_loader.hpp"
 #include "utils/intel_driver.hpp"
-#include "utils/kdmapper.hpp"
+#include "utils/kdmapper_impl.hpp"
 #include "utils/logging.hpp"
 #include <algorithm>
 #include <random>
@@ -102,8 +102,15 @@ bool SecureDriverLoader::LoadDriver(const void* driver_data, size_t size) {
         return false;
     }
     
-    bool mapped = kdmapper::MapDriver(dev, static_cast<BYTE*>(secure_buffer), 0, 0, false, true,
-        kdmapper::AllocationMode::AllocatePool, false, nullptr, nullptr);
+    // Use the kdmapper implementation
+    ULONG64 mapped = kdmapper::MapDriver(dev, 
+                                         reinterpret_cast<BYTE*>(secure_buffer), 
+                                         0, 0, // Parameters
+                                         false, true, // Free, destroyHeader
+                                         kdmapper::AllocationMode::AllocatePool, 
+                                         false, // PassAllocationAddressAsFirstParam
+                                         nullptr, // Callback
+                                         nullptr); // ExitCode
     
     // Secure cleanup
     SecureMemory::WipeMemory(secure_buffer, size);
