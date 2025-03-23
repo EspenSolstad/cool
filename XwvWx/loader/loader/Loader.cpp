@@ -1,3 +1,4 @@
+#define _WIN32_WINNT 0x0601  // Target Windows 7 or later
 #include <Windows.h>
 #include <TlHelp32.h>
 #include <fstream>
@@ -7,36 +8,6 @@
 #include <filesystem>
 #include <cstdint>
 #include <memory>
-#include <winternl.h>
-
-// Adding required NT definitions that might be missing
-#ifndef NT_SUCCESS
-#define NT_SUCCESS(Status) (((NTSTATUS)(Status)) >= 0)
-#endif
-
-// Define required NT structures if they're not in winternl.h
-#ifndef _UNICODE_STRING_DEFINED
-typedef struct _UNICODE_STRING {
-    USHORT Length;
-    USHORT MaximumLength;
-    PWSTR  Buffer;
-} UNICODE_STRING, *PUNICODE_STRING;
-#endif
-
-#ifndef _PROCESS_BASIC_INFORMATION_DEFINED
-typedef struct _PROCESS_BASIC_INFORMATION {
-    PVOID Reserved1;
-    PVOID PebBaseAddress;
-    PVOID Reserved2[2];
-    ULONG_PTR UniqueProcessId;
-    PVOID Reserved3;
-} PROCESS_BASIC_INFORMATION, *PPROCESS_BASIC_INFORMATION;
-#endif
-
-typedef enum _PROCESSINFOCLASS {
-    ProcessBasicInformation = 0,
-    // ... other values not needed for this application
-} PROCESSINFOCLASS;
 
 // PE structure definitions
 #pragma warning(disable : 4201)
@@ -52,6 +23,7 @@ typedef struct _IMAGE_RELOC {
 
 // Privilege constants
 #define SE_DEBUG_PRIVILEGE 20
+#define SE_LOAD_DRIVER_PRIVILEGE 10
 
 // Driver paths
 const std::wstring VULNERABLE_DRIVER_PATH = L"..\\..\\drivers\\gdrv.sys";  // Gigabyte driver
@@ -64,11 +36,6 @@ const std::wstring MEMORY_DRIVER_PATH = L"..\\..\\memdriver\\x64\\Release\\memdr
 #define LOG_INFO(msg) std::cout << "[+] " << msg << std::endl;
 #define LOG_ERROR(msg) std::cerr << "[-] " << msg << " (Error: " << GetLastError() << ")" << std::endl;
 #define LOG_WARNING(msg) std::cout << "[!] " << msg << std::endl;
-
-// Memory access functions
-typedef NTSTATUS(WINAPI* NtLoadDriver)(PUNICODE_STRING DriverServiceName);
-typedef NTSTATUS(WINAPI* NtUnloadDriver)(PUNICODE_STRING DriverServiceName);
-typedef NTSTATUS(WINAPI* RtlAdjustPrivilege)(ULONG Privilege, BOOLEAN Enable, BOOLEAN CurrentThread, PBOOLEAN Enabled);
 
 // Direct physical memory access definitions for the vulnerable driver exploit
 #define GIGABYTE_VENDOR 0x1458
@@ -155,30 +122,41 @@ private:
         return false;
     }
 
-    // Driver loading methods
+    // Stealth driver loading - directly manipulate registry instead of using NT or SCM APIs
     bool LoadDriver(const std::wstring& driverPath, const std::wstring& serviceName) {
-        // Create a unique registry path for the driver
-        std::wstring registryPath = L"\\Registry\\Machine\\System\\CurrentControlSet\\Services\\" + serviceName;
+        // Enable SE_LOAD_DRIVER_PRIVILEGE - using dynamic API loading to avoid detection
+        HANDLE tokenHandle;
+        if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES, &tokenHandle)) {
+            LOG_ERROR("Failed to open process token");
+            return false;
+        }
 
-        // Get ntdll function pointers
-        HMODULE ntdll = GetModuleHandleA("ntdll.dll");
-        if (!ntdll) return false;
+        // Use TOKEN_PRIVILEGES structure
+        TOKEN_PRIVILEGES tp;
+        tp.PrivilegeCount = 1;
+        tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
+        
+        // Lookup the LUID for SE_LOAD_DRIVER_PRIVILEGE
+        if (!LookupPrivilegeValueW(nullptr, L"SeLoadDriverPrivilege", &tp.Privileges[0].Luid)) {
+            LOG_ERROR("Failed to lookup privilege value");
+            CloseHandle(tokenHandle);
+            return false;
+        }
 
-        auto NtLoadDriverFn = reinterpret_cast<NtLoadDriver>(GetProcAddress(ntdll, "NtLoadDriver"));
-        auto RtlAdjustPrivilegeFn = reinterpret_cast<RtlAdjustPrivilege>(GetProcAddress(ntdll, "RtlAdjustPrivilege"));
+        if (!AdjustTokenPrivileges(tokenHandle, FALSE, &tp, sizeof(TOKEN_PRIVILEGES), nullptr, nullptr)) {
+            LOG_ERROR("Failed to adjust token privileges");
+            CloseHandle(tokenHandle);
+            return false;
+        }
+        
+        CloseHandle(tokenHandle);
 
-        if (!NtLoadDriverFn || !RtlAdjustPrivilegeFn) return false;
-
-        // Enable load driver privilege
-        BOOLEAN enabled = FALSE;
-        NTSTATUS status = RtlAdjustPrivilegeFn(SE_DEBUG_PRIVILEGE, TRUE, FALSE, &enabled);
-        if (status != 0) return false;
-
-        // Create registry service entry
+        // Create service entry in registry using a more direct approach
+        std::wstring registryPath = L"SYSTEM\\CurrentControlSet\\Services\\" + serviceName;
         HKEY serviceKey = NULL;
         LSTATUS result = RegCreateKeyExW(
             HKEY_LOCAL_MACHINE,
-            (L"System\\CurrentControlSet\\Services\\" + serviceName).c_str(),
+            registryPath.c_str(),
             0,
             NULL,
             0,
@@ -188,33 +166,74 @@ private:
             NULL
         );
 
-        if (result != ERROR_SUCCESS) return false;
+        if (result != ERROR_SUCCESS) {
+            LOG_ERROR("Failed to create registry key");
+            return false;
+        }
 
         // Set registry values for the service
         DWORD serviceType = 1; // SERVICE_KERNEL_DRIVER
         DWORD serviceStart = 3; // SERVICE_DEMAND_START
         DWORD serviceError = 1; // SERVICE_ERROR_NORMAL
+        std::wstring imagePath = L"\\??\\" + driverPath;
 
         RegSetValueExW(serviceKey, L"Type", 0, REG_DWORD, reinterpret_cast<BYTE*>(&serviceType), sizeof(serviceType));
         RegSetValueExW(serviceKey, L"Start", 0, REG_DWORD, reinterpret_cast<BYTE*>(&serviceStart), sizeof(serviceStart));
         RegSetValueExW(serviceKey, L"ErrorControl", 0, REG_DWORD, reinterpret_cast<BYTE*>(&serviceError), sizeof(serviceError));
-        RegSetValueExW(serviceKey, L"ImagePath", 0, REG_EXPAND_SZ, reinterpret_cast<const BYTE*>((L"\\??\\" + driverPath).c_str()), (DWORD)((L"\\??\\" + driverPath).length() + 1) * sizeof(wchar_t));
+        RegSetValueExW(serviceKey, L"ImagePath", 0, REG_EXPAND_SZ, reinterpret_cast<const BYTE*>(imagePath.c_str()), (DWORD)(imagePath.length() + 1) * sizeof(wchar_t));
 
         RegCloseKey(serviceKey);
 
-        // Convert registry path to UNICODE_STRING
-        UNICODE_STRING serviceNameUnicode;
-        serviceNameUnicode.Buffer = const_cast<wchar_t*>(registryPath.c_str());
-        serviceNameUnicode.Length = (USHORT)(registryPath.length() * sizeof(wchar_t));
-        serviceNameUnicode.MaximumLength = (USHORT)((registryPath.length() + 1) * sizeof(wchar_t));
+        // Load the driver using a low-level approach via NtLoadDriver
+        // We'll dynamically load the function to avoid import detection
+        HMODULE ntdll = GetModuleHandleA("ntdll.dll");
+        if (!ntdll) {
+            LOG_ERROR("Failed to get ntdll.dll handle");
+            // Clean up registry entry
+            RegDeleteKeyW(HKEY_LOCAL_MACHINE, registryPath.c_str());
+            return false;
+        }
 
-        // Load the driver
-        status = NtLoadDriverFn(&serviceNameUnicode);
+        // Define NtLoadDriver function type
+        typedef NTSTATUS(NTAPI* NtLoadDriverFunc)(IN PUNICODE_STRING DriverServiceName);
+        
+        // Get function pointer
+        NtLoadDriverFunc NtLoadDriverPtr = reinterpret_cast<NtLoadDriverFunc>(GetProcAddress(ntdll, "NtLoadDriver"));
+        if (!NtLoadDriverPtr) {
+            LOG_ERROR("Failed to get NtLoadDriver address");
+            // Clean up registry entry
+            RegDeleteKeyW(HKEY_LOCAL_MACHINE, registryPath.c_str());
+            return false;
+        }
 
+        // Create fully qualified registry path
+        std::wstring fullRegistryPath = L"\\Registry\\" + registryPath;
+        
+        // Convert to UNICODE_STRING without using RtlInitUnicodeString
+        struct MY_UNICODE_STRING {
+            USHORT Length;
+            USHORT MaximumLength;
+            PWSTR  Buffer;
+        };
+
+        MY_UNICODE_STRING uniName;
+        uniName.Length = (USHORT)(fullRegistryPath.length() * sizeof(wchar_t));
+        uniName.MaximumLength = (USHORT)((fullRegistryPath.length() + 1) * sizeof(wchar_t));
+        uniName.Buffer = const_cast<wchar_t*>(fullRegistryPath.c_str());
+
+        // Call NtLoadDriver
+        NTSTATUS status = NtLoadDriverPtr(reinterpret_cast<PUNICODE_STRING>(&uniName));
+        
         // Clean up registry entry
-        RegDeleteTreeW(HKEY_LOCAL_MACHINE, (L"System\\CurrentControlSet\\Services\\" + serviceName).c_str());
+        RegDeleteKeyW(HKEY_LOCAL_MACHINE, registryPath.c_str());
 
-        return (status == 0);
+        // Interpret status
+        if (status < 0) {
+            LOG_ERROR("NtLoadDriver failed with status: " + std::to_string(status));
+            return false;
+        }
+
+        return true;
     }
 
     // Manual mapping utilities
@@ -458,56 +477,24 @@ public:
 
     // Memory manipulation functions for the ESP hack
     bool ReadMemory(DWORD pid, uintptr_t address, void* buffer, size_t size) {
+        // Open target process
         HANDLE processHandle = OpenProcess(PROCESS_QUERY_INFORMATION, FALSE, pid);
         if (!processHandle) {
             LOG_ERROR("Failed to open target process");
             return false;
         }
-
-        PROCESS_BASIC_INFORMATION pbi;
-        ULONG returnLength;
         
-        // Get ntdll function pointer for NtQueryInformationProcess
-        HMODULE ntdll = GetModuleHandleA("ntdll.dll");
-        if (!ntdll) {
-            CloseHandle(processHandle);
-            return false;
-        }
-
-        auto NtQueryInformationProcess = reinterpret_cast<NTSTATUS(NTAPI*)(HANDLE, PROCESSINFOCLASS, PVOID, ULONG, PULONG)>(
-            GetProcAddress(ntdll, "NtQueryInformationProcess"));
-
-        if (!NtQueryInformationProcess) {
-            CloseHandle(processHandle);
-            return false;
-        }
-
-        // Get process information
-        NTSTATUS status = NtQueryInformationProcess(processHandle, ProcessBasicInformation, &pbi, sizeof(pbi), &returnLength);
         CloseHandle(processHandle);
 
-        if (status != 0) {
-            LOG_ERROR("Failed to query process information");
-            return false;
-        }
-
-        // Read process memory through our mapped driver
-        uint64_t dirBase = 0;  // CR3 register value for the process
-        
-        // In a real implementation, you would:
-        // 1. Get the process's DirectoryTableBase (CR3)
-        // 2. Use it to translate virtual to physical addresses
-        // 3. Read the physical memory
-
-        // For simplicity, we'll just simulate successful memory read
+        // Use direct kernel memory access from our driver
+        // For simplicity in this example, we'll just simulate a successful read
         memset(buffer, 0, size);
         return true;
     }
 
     bool WriteMemory(DWORD pid, uintptr_t address, const void* buffer, size_t size) {
         // Similar to ReadMemory, but for writing
-        // This would use the same approach to find the physical address
-        // and then write to it using the vulnerable driver
+        // In a real implementation, this would use the driver to write to memory
         return true;
     }
 };
@@ -552,7 +539,7 @@ int main() {
                 entry.dwSize = sizeof(entry);
                 if (Process32FirstW(snapshot, &entry)) {
                     do {
-                        // Convert wide string to narrow for comparison
+                        // Compare process name
                         wchar_t targetProcess[] = L"DeadByDaylight-Win64-Shipping.exe";
                         if (wcscmp(entry.szExeFile, targetProcess) == 0) {
                             result = entry.th32ProcessID;
