@@ -410,7 +410,7 @@ uint32_t IntelDriver::GetWindowsVersion() {
 // Extract driver from resources
 bool IntelDriver::ExtractDriver() {
     // Get the temp path
-    std::wstring tempPath = resource_utils::CreateTempFilePath(L".sys");
+    std::wstring tempPath = resource_utils::GetTempFileName(L".sys");
     
     // Extract the driver resource to the temp file
     bool result = resource_utils::ExtractResourceToFile(

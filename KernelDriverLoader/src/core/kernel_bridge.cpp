@@ -274,8 +274,8 @@ bool KernelBridge::LoadDriver(const void* driverData, size_t size) {
     
     // Use KDMapper to load the driver
     uint64_t driverBase = 0;
-    if (!g_kdMapper.get()->MapDriver(const_cast<void*>(driverData), size, &driverBase)) {
-        SetLastError("Failed to map driver: " + g_kdMapper.get()->GetLastErrorMessage());
+    if (!g_kdMapper->MapDriver(const_cast<void*>(driverData), size, &driverBase)) {
+        SetLastError("Failed to map driver: " + g_kdMapper->GetLastErrorMessage());
         return false;
     }
     
@@ -300,8 +300,8 @@ bool KernelBridge::UnloadDriver(uint64_t baseAddress) {
     }
     
     // Use KDMapper to unload the driver
-    if (!g_kdMapper.get()->UnmapDriver(baseAddress)) {
-        SetLastError("Failed to unmap driver: " + g_kdMapper.get()->GetLastErrorMessage());
+    if (!g_kdMapper->UnmapDriver(baseAddress)) {
+        SetLastError("Failed to unmap driver: " + g_kdMapper->GetLastErrorMessage());
         return false;
     }
     

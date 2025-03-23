@@ -65,7 +65,7 @@ namespace resource_utils {
     }
 
     // Get a temporary filename with the specified extension
-    inline std::wstring CreateTempFilePath(const std::wstring& extension) {
+    inline std::wstring GetTempFileName(const std::wstring& extension) {
         wchar_t tempPath[MAX_PATH];
         wchar_t tempFileName[MAX_PATH];
         

@@ -108,8 +108,8 @@ bool SecureDriverLoader::LoadDriver(const void* driverData, size_t size) {
     
     // Map the driver
     uint64_t driverBase = 0;
-    if (!g_dynamicMapper.get()->MapDriver(driverData, size, &driverBase)) {
-        Logger::LogError("Failed to map driver: {}", g_dynamicMapper.get()->GetLastErrorMessage());
+    if (!g_dynamicMapper->MapDriver(driverData, size, &driverBase)) {
+        Logger::LogError("Failed to map driver: {}", g_dynamicMapper->GetLastErrorMessage());
         return false;
     }
     
@@ -163,8 +163,8 @@ bool SecureDriverLoader::UnloadDriver() {
     }
     
     // Unmap the driver
-    if (!g_dynamicMapper.get()->UnmapDriver()) {
-        Logger::LogError("Failed to unmap driver: {}", g_dynamicMapper.get()->GetLastErrorMessage());
+    if (!g_dynamicMapper->UnmapDriver()) {
+        Logger::LogError("Failed to unmap driver: {}", g_dynamicMapper->GetLastErrorMessage());
         return false;
     }
     
