@@ -9,12 +9,6 @@
 #include "secure_memory.hpp"
 #include "../resources/resource.h"
 
-// Forward declaration
-class IntelDriver;
-
-// Single globally accessible pointer to the Intel driver instance
-extern std::unique_ptr<IntelDriver> g_intelDriver;
-
 // Class for communicating with the Intel driver
 class IntelDriver {
 public:

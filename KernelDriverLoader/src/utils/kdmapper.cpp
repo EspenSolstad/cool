@@ -2,9 +2,6 @@
 #include "../../includes/utils/logging.hpp"
 #include <fstream>
 
-// Global instance
-std::unique_ptr<KDMapper> g_kdMapper;
-
 // Constructor
 KDMapper::KDMapper(IntelDriver* intelDriver)
     : m_intelDriver(intelDriver),

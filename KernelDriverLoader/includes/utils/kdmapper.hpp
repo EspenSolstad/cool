@@ -12,10 +12,6 @@
 // Forward declarations
 class IntelDriver;
 class PortableExecutable;
-class KDMapper;
-
-// Global instance for easier access
-extern std::unique_ptr<KDMapper> g_kdMapper;
 
 // Include needed for implementation
 #include "intel_driver.hpp"

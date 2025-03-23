@@ -7,10 +7,7 @@
 
 // Forward declarations
 class PortableExecutable;
-class DynamicMapper;
-
-// Global instance for easier access
-extern std::unique_ptr<DynamicMapper> g_dynamicMapper;
+class KDMapper;
 
 // Include after forward declarations
 #include "../utils/kdmapper.hpp"
@@ -49,6 +46,9 @@ public:
     
     // Get the last error message
     std::string GetLastErrorMessage() const;
+    
+    // Set the KDMapper instance to use
+    void SetKDMapper(KDMapper* kdMapper);
 
 private:
     // Internal context structure
