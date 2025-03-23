@@ -1,24 +1,14 @@
 #pragma once
 #include "KernelMemoryAccess.h"
 #include <vector>
-#include <map>
 
 namespace kernel {
-    // Physical memory access implementation
+    // Driver-based memory access implementation
     class PhysicalMemoryAccessor : public MemoryAccessor {
     private:
-        HANDLE physicalMemoryHandle = INVALID_HANDLE_VALUE;
         uint64_t cr3Value = 0; // Control Register 3 (Page Directory Base)
         
-        // Cached page table mappings
-        struct MappedRegion {
-            void* mappedAddress;
-            uint64_t physicalAddress;
-            size_t size;
-        };
-        std::vector<MappedRegion> mappedRegions;
-        
-        // Memory allocations
+        // Memory allocations tracking
         struct Allocation {
             uint64_t address;
             size_t size;
@@ -28,21 +18,13 @@ namespace kernel {
         // Memory page size
         const size_t PAGE_SIZE = 0x1000;
         
-        // Paging structures
-        static const uint64_t PTE_PRESENT = 0x1;
-        static const uint64_t PTE_WRITE = 0x2;
-        static const uint64_t PTE_USER = 0x4;
-        static const uint64_t PTE_LARGE_PAGE = 0x80;
-        static const uint64_t PTE_NX = 0x8000000000000000;
-        
         // Internal functions
-        bool CreateSymbolicLink();
-        bool TranslateVirtualToPhysical(uint64_t virtualAddress, uint64_t& physicalAddress);
-        void* MapPhysicalMemory(uint64_t physicalAddress, size_t size);
-        bool UnmapPhysicalMemory(void* mappedAddress);
         bool GetCR3Value();
         bool ElevateProcessPrivileges();
-        bool LoadDriverForMemoryAccess();
+        bool CheckDriverAccess();
+        
+        // Driver communication methods
+        bool GetProcessCr3ValueViaDriver(DWORD processId, uint64_t& cr3Value);
         
     public:
         PhysicalMemoryAccessor();
@@ -55,6 +37,9 @@ namespace kernel {
         uint64_t AllocateMemory(size_t size) override;
         bool FreeMemory(uint64_t address) override;
         bool ExecuteCode(uint64_t address) override;
-        std::string GetName() const override { return "Physical Memory Access"; }
+        std::string GetName() const override { return "Driver Memory Access"; }
+        
+        // Additional helper methods
+        bool GetProcessCr3Value(DWORD processId, uint64_t& cr3ValueOut);
     };
 }

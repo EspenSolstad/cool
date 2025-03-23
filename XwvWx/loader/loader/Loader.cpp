@@ -39,38 +39,23 @@ const std::wstring MEMORY_DRIVER_PATH = L"..\\..\\memdriver\\x64\\Release\\memdr
 #define ViewShare 1
 #define ViewUnmap 2
 
-// External NT function declarations
-extern "C" {
-    NTSTATUS NTAPI NtOpenSection(
-        OUT PHANDLE SectionHandle,
-        IN ACCESS_MASK DesiredAccess,
-        IN POBJECT_ATTRIBUTES ObjectAttributes
-    );
+// IOCTL codes for driver communication
+#define IOCTL_READ_MEMORY  CTL_CODE(FILE_DEVICE_UNKNOWN, 0x800, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_WRITE_MEMORY CTL_CODE(FILE_DEVICE_UNKNOWN, 0x801, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_GET_PROCESS_CR3 CTL_CODE(FILE_DEVICE_UNKNOWN, 0x802, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
-    NTSTATUS NTAPI NtMapViewOfSection(
-        IN HANDLE SectionHandle,
-        IN HANDLE ProcessHandle,
-        IN OUT PVOID* BaseAddress,
-        IN ULONG_PTR ZeroBits,
-        IN SIZE_T CommitSize,
-        IN OUT PLARGE_INTEGER SectionOffset OPTIONAL,
-        IN OUT PSIZE_T ViewSize,
-        IN DWORD InheritDisposition,
-        IN ULONG AllocationType,
-        IN ULONG Win32Protect
-    );
+// Structures for IOCTL requests
+typedef struct _KERNEL_READ_REQUEST {
+    UINT64 Address;
+    PVOID Buffer;
+    UINT64 Size;
+} KERNEL_READ_REQUEST, *PKERNEL_READ_REQUEST;
 
-    NTSTATUS NTAPI NtUnmapViewOfSection(
-        IN HANDLE ProcessHandle,
-        IN PVOID BaseAddress
-    );
-}
-
-// Use the existing RtlInitUnicodeString from ntdll
-extern "C" VOID NTAPI RtlInitUnicodeString(
-    PUNICODE_STRING DestinationString,
-    PCWSTR SourceString
-);
+typedef struct _KERNEL_WRITE_REQUEST {
+    UINT64 Address;
+    PVOID Buffer;
+    UINT64 Size;
+} KERNEL_WRITE_REQUEST, *PKERNEL_WRITE_REQUEST;
 
 // Manual mapping class
 class ManualMapper {
@@ -97,137 +82,101 @@ private:
     // Memory page size
     const size_t PAGE_SIZE = 0x1000;
 
-    // Physical memory access implementation
-    bool CreateSymbolicLink() {
-        // In a real implementation, we might need to create a symbolic link
-        // to bypass restrictions on accessing \Device\PhysicalMemory directly
-        
-        // This is simplified for this example - in a real implementation
-        // you'd need privilege escalation and complex techniques
-        
-        LOG_INFO("Physical memory access mechanism prepared");
-        return true;
-    }
-    
-    bool TranslateVirtualToPhysical(uint64_t virtualAddress, uint64_t& physicalAddress) {
-        // For our first implementation, we'll use a simplified approach that still has a chance of working
-        // In a real implementation, we would need to:
-        // 1. Read the page tables from kernel memory
-        // 2. Walk the page tables to translate the address
-        
-        // This is a placeholder for our first iteration - we'll refine it in future versions
-        physicalAddress = virtualAddress & 0x7FFFFFFFFFF; // Simple masking to simulate translation
-        
-        LOG_INFO("Translated virtual address 0x" + std::to_string(virtualAddress) + 
-                 " to physical address 0x" + std::to_string(physicalAddress));
-        return true;
-    }
+    // Driver communication methods
 
-    void* MapPhysicalMemory(uint64_t physicalAddress, size_t size) {
-        // In this iteration, we'll allocate virtual memory in our process
-        // In future iterations, we'll implement ways to map this to physical memory
-        
-        // Align the size to page boundaries for consistency
-        size_t alignedSize = ((size + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1));
-        
-        void* mappedAddress = VirtualAlloc(NULL, alignedSize, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-        if (!mappedAddress) {
-            LOG_ERROR("Failed to allocate virtual memory");
-            return nullptr;
-        }
-        
-        // Add to mapped regions (we'll keep this for tracking)
-        MappedRegion region;
-        region.mappedAddress = mappedAddress;
-        region.physicalAddress = physicalAddress;
-        region.size = alignedSize;
-        mappedRegions.push_back(region);
-        
-        LOG_INFO("Mapped physical address 0x" + std::to_string(physicalAddress) + 
-                 " to virtual address 0x" + std::to_string((uint64_t)mappedAddress));
-        
-        return mappedAddress;
-    }
-
-    bool UnmapPhysicalMemory(void* mappedAddress) {
-        // Find the region
-        size_t regionIndex = SIZE_MAX;
-        for (size_t i = 0; i < mappedRegions.size(); i++) {
-            if (mappedRegions[i].mappedAddress == mappedAddress) {
-                regionIndex = i;
-                break;
-            }
-        }
-        
-        if (regionIndex == SIZE_MAX) {
-            LOG_ERROR("Could not find mapped region for address: " + std::to_string(reinterpret_cast<uint64_t>(mappedAddress)));
-            return false;
-        }
-        
-        // Free the virtual memory
-        if (!VirtualFree(mappedAddress, 0, MEM_RELEASE)) {
-            LOG_ERROR("Failed to free virtual memory");
-            return false;
-        }
-        
-        // Remove from mapped regions
-        mappedRegions.erase(mappedRegions.begin() + regionIndex);
-        
-        return true;
-    }
-
-    // Core memory operations
+    // Read memory using driver
     bool ReadKernelMemory(uint64_t address, void* buffer, size_t size) {
-        // Translate virtual to physical address
-        uint64_t physicalAddress;
-        if (!TranslateVirtualToPhysical(address, physicalAddress)) {
-            LOG_ERROR("Failed to translate virtual address: 0x" + std::to_string(address));
+        // Open a handle to our device
+        HANDLE hDevice = CreateFileW(
+            L"\\\\.\\MemoryAccess",
+            GENERIC_READ | GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            NULL,
+            OPEN_EXISTING,
+            0,
+            NULL
+        );
+        
+        if (hDevice == INVALID_HANDLE_VALUE) {
+            LOG_ERROR("Failed to open memory access device for reading");
             return false;
         }
-
-        // Map the physical memory
-        void* mappedAddress = MapPhysicalMemory(physicalAddress, size);
-        if (!mappedAddress) {
-            LOG_ERROR("Failed to map physical address: 0x" + std::to_string(physicalAddress));
+        
+        // Set up the read request
+        KERNEL_READ_REQUEST readRequest = { 0 };
+        readRequest.Address = address;
+        readRequest.Buffer = buffer;
+        readRequest.Size = size;
+        
+        // Send the IOCTL
+        DWORD bytesReturned = 0;
+        BOOL success = DeviceIoControl(
+            hDevice,
+            IOCTL_READ_MEMORY,
+            &readRequest,
+            sizeof(readRequest),
+            &readRequest,
+            sizeof(readRequest),
+            &bytesReturned,
+            NULL
+        );
+        
+        // Close the handle
+        CloseHandle(hDevice);
+        
+        if (!success) {
+            LOG_ERROR("Failed to read memory via driver, error: " + std::to_string(GetLastError()));
             return false;
         }
-
-        // Read the memory
-        memcpy(buffer, mappedAddress, size);
-
-        // Unmap the physical memory
-        if (!UnmapPhysicalMemory(mappedAddress)) {
-            LOG_WARNING("Failed to unmap physical memory");
-            // Continue anyway
-        }
-
+        
         return true;
     }
 
+    // Write memory using driver
     bool WriteKernelMemory(uint64_t address, const void* buffer, size_t size) {
-        // Translate virtual to physical address
-        uint64_t physicalAddress;
-        if (!TranslateVirtualToPhysical(address, physicalAddress)) {
-            LOG_ERROR("Failed to translate virtual address: 0x" + std::to_string(address));
+        // Open a handle to our device
+        HANDLE hDevice = CreateFileW(
+            L"\\\\.\\MemoryAccess",
+            GENERIC_READ | GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            NULL,
+            OPEN_EXISTING,
+            0,
+            NULL
+        );
+        
+        if (hDevice == INVALID_HANDLE_VALUE) {
+            LOG_ERROR("Failed to open memory access device for writing");
             return false;
         }
-
-        // Map the physical memory
-        void* mappedAddress = MapPhysicalMemory(physicalAddress, size);
-        if (!mappedAddress) {
-            LOG_ERROR("Failed to map physical address: 0x" + std::to_string(physicalAddress));
+        
+        // Set up the write request
+        KERNEL_WRITE_REQUEST writeRequest = { 0 };
+        writeRequest.Address = address;
+        writeRequest.Buffer = (PVOID)buffer; // Cast away const for the request structure
+        writeRequest.Size = size;
+        
+        // Send the IOCTL
+        DWORD bytesReturned = 0;
+        BOOL success = DeviceIoControl(
+            hDevice,
+            IOCTL_WRITE_MEMORY,
+            &writeRequest,
+            sizeof(writeRequest),
+            &writeRequest,
+            sizeof(writeRequest),
+            &bytesReturned,
+            NULL
+        );
+        
+        // Close the handle
+        CloseHandle(hDevice);
+        
+        if (!success) {
+            LOG_ERROR("Failed to write memory via driver, error: " + std::to_string(GetLastError()));
             return false;
         }
-
-        // Write the memory
-        memcpy(mappedAddress, buffer, size);
-
-        // Unmap the physical memory
-        if (!UnmapPhysicalMemory(mappedAddress)) {
-            LOG_WARNING("Failed to unmap physical memory");
-            // Continue anyway
-        }
-
+        
         return true;
     }
 
@@ -463,25 +412,16 @@ private:
 public:
     ManualMapper() = default;
     ~ManualMapper() {
-        // Clean up any open handles and mappings
+        // Clean up any open handles
         if (physicalMemoryHandle != INVALID_HANDLE_VALUE) {
             CloseHandle(physicalMemoryHandle);
             physicalMemoryHandle = INVALID_HANDLE_VALUE;
         }
-
-        // Unmap any remaining regions
-        for (const auto& region : mappedRegions) {
-            UnmapPhysicalMemory(region.mappedAddress);
-        }
-        mappedRegions.clear();
     }
 
     bool Initialize() {
         // First announce we're preparing
-        LOG_INFO("Physical memory access mechanism prepared");
-        
-        // Instead of trying to access \Device\PhysicalMemory directly,
-        // we'll try using a more modern approach
+        LOG_INFO("Driver memory access mechanism preparing");
         
         // Step 1: Get system information to locate kernel structures
         if (!GetNtoskrnlBase()) {
@@ -489,24 +429,43 @@ public:
             // Continue anyway as we can try alternative methods
         }
         
-        // Step 2: Create a handle to our own process for memory operations
-        HANDLE processHandle = GetCurrentProcess();
-        if (processHandle == NULL) {
-            LOG_ERROR("Failed to get handle to current process");
+        // Step 2: Attempt to elevate our process privileges
+        if (!ElevateProcessPrivileges()) {
+            LOG_WARNING("Failed to elevate process privileges. Driver operations may fail.");
+            // We'll continue anyway and attempt to use the driver
+        }
+        
+        // Step 3: Check for the driver
+        if (!CheckDriverAccess()) {
+            LOG_ERROR("Failed to access memory driver. Kernel operations will not be available.");
             return false;
         }
         
-        // Step 3: Prepare for memory operations
-        // We'll use the process handle as our access token
-        physicalMemoryHandle = processHandle;
+        return true;
+    }
+    
+    // Check if the driver is accessible
+    bool CheckDriverAccess() {
+        // Check if our custom device is available
+        HANDLE hDevice = CreateFileW(
+            L"\\\\.\\MemoryAccess",
+            GENERIC_READ | GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            NULL,
+            OPEN_EXISTING,
+            0,
+            NULL
+        );
         
-        // Step 4: Attempt to elevate our process privileges
-        if (!ElevateProcessPrivileges()) {
-            LOG_WARNING("Failed to elevate process privileges. Some features may be limited.");
-            // We'll continue anyway as we can try alternative methods
+        if (hDevice != INVALID_HANDLE_VALUE) {
+            // Device exists, we can use it
+            physicalMemoryHandle = hDevice;
+            LOG_INFO("Memory access driver found and ready");
+            return true;
         }
         
-        return true;
+        LOG_ERROR("Memory access driver not found. Make sure the driver is loaded.");
+        return false;
     }
     
     // Add this new method for elevating process privileges
