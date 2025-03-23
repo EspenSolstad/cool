@@ -64,6 +64,17 @@ echo.
 
 REM Step 1: Load GDRV driver
 echo [*] Step 1: Loading GDRV driver...
+
+REM Check and cleanup existing service
+echo [*] Checking for existing GDRV service...
+sc query GDRVDrv >nul 2>&1
+if %ERRORLEVEL% EQU 0 (
+    echo [*] Found existing service, removing...
+    sc stop GDRVDrv >nul 2>&1
+    sc delete GDRVDrv >nul 2>&1
+    timeout /t 2 >nul
+)
+
 echo [*] Creating service...
 
 sc create GDRVDrv type= kernel binPath= "%GDRV_DRIVER%" >nul

@@ -278,7 +278,7 @@ private:
     }
     
     // Static memory region for initial allocation
-    static uint64_t nextAllocation = 0xFFFF800000000000;
+    static inline uint64_t nextAllocation = 0xFFFF800000000000;
     
     // Allocate kernel memory using ExAllocatePool
     uint64_t AllocateKernelMemory(size_t size) {
