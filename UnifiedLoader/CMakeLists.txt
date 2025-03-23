@@ -11,20 +11,20 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Convert binary files to headers during build
 add_custom_command(
     OUTPUT 
-        ${CMAKE_CURRENT_SOURCE_DIR}/include/drivers/memdriver.hpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/include/drivers/rwdrv.hpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/include/drivers/cheat.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/drivers/memdriver.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/drivers/rwdrv.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/drivers/cheat.hpp
     COMMAND ${CMAKE_BINARY_DIR}/tools/bin2header
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/drivers/memdriver.sys
-        ${CMAKE_CURRENT_SOURCE_DIR}/include/drivers/memdriver.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../kernel/memdriver.sys
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/drivers/memdriver.hpp
         memdriver
     COMMAND ${CMAKE_BINARY_DIR}/tools/bin2header
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/drivers/RwDrv.sys
-        ${CMAKE_CURRENT_SOURCE_DIR}/include/drivers/rwdrv.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../kernel/RwDrv.sys
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/drivers/rwdrv.hpp
         rwdrv
     COMMAND ${CMAKE_BINARY_DIR}/tools/bin2header
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/drivers/ExternalCheat.exe
-        ${CMAKE_CURRENT_SOURCE_DIR}/include/drivers/cheat.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../kernel/ExternalCheat.exe
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/drivers/cheat.hpp
         cheat
     DEPENDS bin2header
     COMMENT "Generating driver headers"
@@ -32,9 +32,9 @@ add_custom_command(
 
 add_custom_target(generate_headers
     DEPENDS 
-        ${CMAKE_CURRENT_SOURCE_DIR}/include/drivers/memdriver.hpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/include/drivers/rwdrv.hpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/include/drivers/cheat.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/drivers/memdriver.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/drivers/rwdrv.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/drivers/cheat.hpp
 )
 
 # Source files
@@ -50,7 +50,7 @@ set(SOURCES
 )
 
 # Create executable
-add_executable(UnifiedLoader WIN32 ${SOURCES})
+add_executable(UnifiedLoader ${SOURCES})
 add_dependencies(UnifiedLoader generate_headers)
 
 # Windows-specific settings
@@ -60,12 +60,11 @@ if(WIN32)
         UNICODE
         _UNICODE
         WIN32_LEAN_AND_MEAN
-        NOMINMAX
     )
     
     # Link Windows libraries
     target_link_libraries(UnifiedLoader PRIVATE
-        ntdll
+        ntdll.lib
     )
 endif()
 
@@ -96,6 +95,12 @@ target_include_directories(UnifiedLoader PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
+# Post-build commands
+add_custom_command(TARGET UnifiedLoader POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E echo "Stripping debug information..."
+    COMMAND ${CMAKE_STRIP} $<TARGET_FILE:UnifiedLoader>
+)
+
 # Set output directories
 set_target_properties(UnifiedLoader PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
@@ -111,3 +116,18 @@ if(supported)
         INTERPROCEDURAL_OPTIMIZATION TRUE
     )
 endif()
+
+# Copy resources
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/resources/app.manifest
+    ${CMAKE_BINARY_DIR}/bin/app.manifest
+    COPYONLY
+)
+
+# Add resource file
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/resources/resource.rc.in
+    ${CMAKE_CURRENT_BINARY_DIR}/resource.rc
+    @ONLY
+)
+target_sources(UnifiedLoader PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/resource.rc)

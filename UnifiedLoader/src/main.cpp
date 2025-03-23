@@ -4,8 +4,8 @@
 #include "drivers/memdriver.hpp"
 #include "drivers/rwdrv.hpp"
 #include "drivers/cheat.hpp"
-#include "utils/logging.hpp"
 #include <Windows.h>
+#include <iostream>
 #include <memory>
 #include <thread>
 #include <chrono>
@@ -16,17 +16,17 @@ public:
         // Hide console window
         ShowWindow(GetConsoleWindow(), SW_HIDE);
         
-        LOG_INFO("Initializing secure loader...");
+        std::cout << "[*] Initializing secure loader...\n";
         
         auto& bridge = KernelBridge::GetInstance();
         if (!bridge.EstablishSecureChannel()) {
-            LOG_ERROR("Failed to establish secure channel");
+            std::cerr << "[-] Failed to establish secure channel\n";
             return false;
         }
 
         loader = std::make_unique<SecureDriverLoader>();
         if (!loader->Initialize()) {
-            LOG_ERROR("Failed to initialize secure loader");
+            std::cerr << "[-] Failed to initialize secure loader\n";
             return false;
         }
 
@@ -35,34 +35,34 @@ public:
     }
 
     static bool LoadDrivers() {
-        LOG_INFO("Loading system drivers...");
+        std::cout << "[*] Loading system drivers...\n";
 
         // Load memdriver
         if (!loader->LoadDriver(memdriver, memdriver_len)) {
-            LOG_ERROR("Failed to load memdriver");
+            std::cerr << "[-] Failed to load memdriver\n";
             return false;
         }
 
-        LOG_SUCCESS("memdriver loaded successfully");
+        std::cout << "[+] memdriver loaded successfully\n";
 
         // Load rwdrv
         if (!mapper->MapDriver(rwdrv, rwdrv_len)) {
-            LOG_ERROR("Failed to map rwdrv");
+            std::cerr << "[-] Failed to map rwdrv\n";
             return false;
         }
 
-        LOG_SUCCESS("rwdrv mapped successfully");
+        std::cout << "[+] rwdrv mapped successfully\n";
 
         return true;
     }
 
     static bool LoadCheat() {
-        LOG_INFO("Loading cheat module...");
+        std::cout << "[*] Loading cheat module...\n";
 
         // Create secure memory region for cheat
         void* cheat_section = SecureMemory::AllocateSecure(cheat_len);
         if (!cheat_section) {
-            LOG_ERROR("Failed to allocate secure memory for cheat");
+            std::cerr << "[-] Failed to allocate secure memory for cheat\n";
             return false;
         }
 
@@ -78,16 +78,16 @@ public:
         }
         catch (...) {
             SecureMemory::FreeSecure(cheat_section, cheat_len);
-            LOG_ERROR("Failed to execute cheat");
+            std::cerr << "[-] Failed to execute cheat\n";
             return false;
         }
 
-        LOG_SUCCESS("Cheat loaded successfully");
+        std::cout << "[+] Cheat loaded successfully\n";
         return true;
     }
 
     static void Cleanup() {
-        LOG_INFO("Performing secure cleanup...");
+        std::cout << "[*] Performing secure cleanup...\n";
 
         if (mapper) {
             mapper->UnmapDriver();
@@ -100,7 +100,7 @@ public:
         auto& bridge = KernelBridge::GetInstance();
         bridge.CloseChannel();
 
-        LOG_SUCCESS("Cleanup complete");
+        std::cout << "[+] Cleanup complete\n";
     }
 
 private:
@@ -118,10 +118,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     freopen_s(&fDummy, "CONOUT$", "w", stdout);
     freopen_s(&fDummy, "CONOUT$", "w", stderr);
 
-    LOG_INFO("Starting unified loader...");
+    std::cout << "[*] Starting unified loader...\n";
 
     if (!UnifiedLoader::Initialize()) {
-        LOG_ERROR("Initialization failed");
+        std::cerr << "[-] Initialization failed\n";
         return -1;
     }
 
@@ -138,7 +138,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         return -1;
     }
 
-    LOG_SUCCESS("All components loaded successfully");
+    std::cout << "[✓] All components loaded successfully\n";
     
     // Keep the process running
     while (true) {
