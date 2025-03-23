@@ -42,7 +42,7 @@ bool Initialize() {
     }
 
     // Load the Intel driver
-    if (!g_intelDriver->Load()) {
+    if (g_intelDriver->Load() == false) {
         Logger::LogError("Failed to load Intel driver");
         return false;
     }
@@ -77,7 +77,7 @@ void Cleanup() {
     Logger::LogInfo("Cleaning up resources...");
     
     // Unmap any loaded drivers
-    if (g_dynamicMapper && g_dynamicMapper->IsDriverMapped()) {
+    if (g_dynamicMapper != nullptr && g_dynamicMapper->IsDriverMapped()) {
         if (g_dynamicMapper->UnmapDriver()) {
             Logger::LogInfo("Dynamic driver unmapped successfully");
         }
@@ -93,7 +93,7 @@ void Cleanup() {
     g_kdMapper.reset();
     
     // Unload the Intel driver
-    if (g_intelDriver) {
+    if (g_intelDriver != nullptr) {
         if (g_intelDriver->Unload()) {
             Logger::LogInfo("Intel driver unloaded successfully");
         }
@@ -186,7 +186,7 @@ bool MapCustomDriver() {
     std::cout << "Enter driver path: ";
     std::cin >> driverPath;
     
-    if (!std::filesystem::exists(driverPath)) {
+    if (std::filesystem::exists(driverPath) == false) {
         Logger::LogError("Driver file not found: {}", driverPath);
         return false;
     }
@@ -195,7 +195,7 @@ bool MapCustomDriver() {
     
     // Read the driver file
     std::ifstream file(driverPath, std::ios::binary);
-    if (!file) {
+    if (file.is_open() == false) {
         Logger::LogError("Failed to open driver file: {}", driverPath);
         return false;
     }
@@ -224,7 +224,7 @@ bool MapCustomDriver() {
 
 // Handle driver unmapping
 bool UnmapDriver() {
-    if (!g_dynamicMapper->IsDriverMapped()) {
+    if (g_dynamicMapper->IsDriverMapped() == false) {
         Logger::LogWarning("No driver is currently mapped");
         return false;
     }
@@ -254,7 +254,7 @@ int main() {
     PrintBanner();
     
     // Require administrator privileges
-    if (!IsUserAnAdmin()) {
+    if (IsUserAnAdmin() == false) {
         Logger::LogCritical("This application requires administrator privileges");
         std::cout << "Press any key to exit..." << std::endl;
         (void)_getch();
@@ -262,7 +262,7 @@ int main() {
     }
     
     // Initialize the application
-    if (!Initialize()) {
+    if (Initialize() == false) {
         Logger::LogCritical("Failed to initialize application");
         std::cout << "Press any key to exit..." << std::endl;
         (void)_getch();

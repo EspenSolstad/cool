@@ -73,7 +73,7 @@ bool DynamicMapper::MapDriver(const void* driverData, size_t size, uint64_t* pOu
     
     // Map the driver
     uint64_t driverBase = 0;
-    if (!g_kdMapper->MapDriver(const_cast<void*>(driverData), size, &driverBase)) {
+    if (g_kdMapper->MapDriver(const_cast<void*>(driverData), size, &driverBase) == false) {
         SetLastError("KDMapper failed to map driver: " + g_kdMapper->GetLastErrorMessage());
         return false;
     }
@@ -122,7 +122,7 @@ bool DynamicMapper::UnmapDriver() {
     }
     
     // Unmap the driver
-    if (!g_kdMapper->UnmapDriver(m_mappedDriverBase)) {
+    if (g_kdMapper->UnmapDriver(m_mappedDriverBase) == false) {
         SetLastError("KDMapper failed to unmap driver: " + g_kdMapper->GetLastErrorMessage());
         return false;
     }
