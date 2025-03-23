@@ -3,7 +3,7 @@
 #include <chrono>
 
 // Global instance for easier access - defined in main.cpp
-extern std::unique_ptr<DynamicMapper> g_dynamicMapper;
+extern std::unique_ptr<DynamicMapper, std::default_delete<DynamicMapper>> g_dynamicMapper;
 
 // Internal implementation structure
 struct DynamicMapper::MappingContext {
@@ -66,15 +66,15 @@ bool DynamicMapper::MapDriver(const void* driverData, size_t size, uint64_t* pOu
     }
     
     // Use KDMapper to do the actual mapping
-    if (g_kdMapper == nullptr) {
+    if (!g_kdMapper) {
         SetLastError("KDMapper not initialized");
         return false;
     }
     
     // Map the driver
     uint64_t driverBase = 0;
-    if (!g_kdMapper->MapDriver(const_cast<void*>(driverData), size, &driverBase)) {
-        SetLastError("KDMapper failed to map driver: " + g_kdMapper->GetLastErrorMessage());
+    if (!g_kdMapper.get()->MapDriver(const_cast<void*>(driverData), size, &driverBase)) {
+        SetLastError("KDMapper failed to map driver: " + g_kdMapper.get()->GetLastErrorMessage());
         return false;
     }
     
@@ -116,14 +116,14 @@ bool DynamicMapper::UnmapDriver() {
     RemoveTraces();
     
     // Use KDMapper to do the actual unmapping
-    if (g_kdMapper == nullptr) {
+    if (!g_kdMapper) {
         SetLastError("KDMapper not initialized");
         return false;
     }
     
     // Unmap the driver
-    if (!g_kdMapper->UnmapDriver(m_mappedDriverBase)) {
-        SetLastError("KDMapper failed to unmap driver: " + g_kdMapper->GetLastErrorMessage());
+    if (!g_kdMapper.get()->UnmapDriver(m_mappedDriverBase)) {
+        SetLastError("KDMapper failed to unmap driver: " + g_kdMapper.get()->GetLastErrorMessage());
         return false;
     }
     

@@ -67,4 +67,4 @@ private:
 };
 
 // Global instance for easier access
-extern std::unique_ptr<KDMapper> g_kdMapper;
+extern std::unique_ptr<KDMapper, std::default_delete<KDMapper>> g_kdMapper;
