@@ -75,7 +75,7 @@ bool GDRVMapper::WritePhysicalMemory(uint64_t physAddress, const void* buffer, s
     if (hDevice == INVALID_HANDLE_VALUE) return false;
     
     // Try multiple times with different offsets if initial attempt fails
-    for (int attempt = 0; attempt < 3; attempt++) {
+    for (int attempt = 0; attempt < 8; attempt++) {
         if (attempt > 0) {
             std::cout << "[*] Write retry attempt " << attempt << " at 0x" << std::hex << physAddress << std::dec << std::endl;
             physAddress += PAGE_SIZE; // Try next page
@@ -173,7 +173,7 @@ uint64_t GDRVMapper::FindGDRVWritableMemory() {
     }
     
     // If standard offsets fail, try scanning in a loop
-    for (uint64_t offset = 0x1000; offset < 0x50000; offset += 0x1000) {
+    for (uint64_t offset = 0x1000; offset < 0x200000; offset += 0x1000) {
         // Skip offsets we already tried
         bool already_tried = false;
         for (auto standard_offset : offsets) {
