@@ -27,14 +27,37 @@ if %ERRORLEVEL% neq 0 (
     exit /b 1
 )
 
+rem Create required directories
+mkdir bin\Release 2>nul
+mkdir bin\Debug 2>nul
+mkdir obj 2>nul
+mkdir include\drivers 2>nul
+
 rem Build bin2header tool first
+echo Building bin2header tool...
 msbuild UnifiedLoader.sln /p:Configuration=Release /p:Platform=x64 /t:bin2header /m
 if %ERRORLEVEL% neq 0 (
     echo ERROR: Failed to build bin2header tool.
     exit /b 1
 )
 
+rem Create driver files placeholders if they don't exist
+if not exist "src\drivers" mkdir "src\drivers"
+if not exist "src\drivers\memdriver.sys" (
+    echo Creating placeholder memdriver.sys...
+    echo This is a placeholder file > src\drivers\memdriver.sys
+)
+if not exist "src\drivers\RwDrv.sys" (
+    echo Creating placeholder RwDrv.sys...
+    echo This is a placeholder file > src\drivers\RwDrv.sys
+)
+if not exist "src\drivers\ExternalCheat.exe" (
+    echo Creating placeholder ExternalCheat.exe...
+    echo This is a placeholder file > src\drivers\ExternalCheat.exe
+)
+
 rem Then build main project
+echo Building UnifiedLoader...
 msbuild UnifiedLoader.sln /p:Configuration=Release /p:Platform=x64 /t:UnifiedLoader /m
 if %ERRORLEVEL% neq 0 (
     echo ERROR: Failed to build UnifiedLoader.
