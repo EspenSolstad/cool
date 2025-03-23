@@ -1,0 +1,8 @@
+﻿cl : command line  warning D9025: overriding '/sdl' with '/GS-'
+  ManualSysMapper.cpp
+  Generating code
+  7 of 500 functions ( 1.4%) were compiled, the rest were copied from previous compilation.
+    5 functions were new in current compilation
+    82 functions had inline decision re-evaluated but remain unchanged
+  Finished generating code
+  ManualSysMapper.vcxproj -> C:\Users\eyesu\OneDrive\Documents\ditwordem\ManualSysMapper\ManualSysMapper\x64\Release\ManualSysMapper.exe
