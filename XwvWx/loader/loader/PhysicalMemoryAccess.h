@@ -41,6 +41,8 @@ namespace kernel {
         void* MapPhysicalMemory(uint64_t physicalAddress, size_t size);
         bool UnmapPhysicalMemory(void* mappedAddress);
         bool GetCR3Value();
+        bool ElevateProcessPrivileges();
+        bool LoadDriverForMemoryAccess();
         
     public:
         PhysicalMemoryAccessor();
