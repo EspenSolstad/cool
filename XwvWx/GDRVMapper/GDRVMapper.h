@@ -10,6 +10,8 @@ public:
 
     // Initialize the mapper
     bool Initialize();
+    bool ExecuteBootstrapShellcode(uint64_t functionAddr, uint64_t* result);
+    uint64_t FindKThreadStackMemory();
     
     // Map a driver into kernel memory
     bool MapMemoryDriver(const std::string& driverPath, uint64_t& baseAddress);

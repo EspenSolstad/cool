@@ -24,6 +24,7 @@ struct KernelShellcode {
 
 class ShellcodeUtils {
 public:
+    static std::vector<uint8_t> CreateFastReturnShellcode(uint64_t functionAddress);
     static std::vector<uint8_t> CreateCR3ReadShellcode();
     static std::vector<uint8_t> CreateKernelFunctionCallShellcode(uint64_t function, uint64_t arg1, uint64_t arg2);
     static std::vector<uint8_t> CreateJumpShellcode(uint64_t targetAddr);

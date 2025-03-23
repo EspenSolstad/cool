@@ -1,5 +1,16 @@
 #include "ShellcodeUtils.h"
 
+std::vector<uint8_t> ShellcodeUtils::CreateFastReturnShellcode(uint64_t functionAddress) {
+    std::vector<uint8_t> sc = {
+        0x48, 0xB8,                   // mov rax, ...
+        0, 0, 0, 0, 0, 0, 0, 0,      // function address placeholder
+        0xFF, 0xD0,                   // call rax
+        0xC3                          // ret
+    };
+    *(uint64_t*)&sc[2] = functionAddress;
+    return sc;
+}
+
 std::vector<uint8_t> ShellcodeUtils::CreateCR3ReadShellcode() {
     // Simple shellcode to read CR3 register
     std::vector<uint8_t> shellcode = {

