@@ -72,10 +72,9 @@ typedef NTSTATUS(NTAPI* NtQuerySystemInformationFn)(
 );
 
 // For VirtualToPhysical translation
-typedef enum _SYSTEM_INFORMATION_CLASS {
-    SystemModuleInformation = 11,
-    SystemKernelVa = 0x25 // Specific class for virtual address info
-} SYSTEM_INFORMATION_CLASS;
+// Instead of redefining the enum, we'll use constants to avoid redefinition
+#define SYSTEM_MODULE_INFORMATION_CLASS 11
+#define SYSTEM_KERNEL_VA 0x25
 
 // For kernel pool allocation
 typedef enum _POOL_TYPE {
@@ -200,7 +199,7 @@ private:
 
         ULONG returnLength = 0;
         NTSTATUS status = NtQuerySystemInformation(
-            SystemModuleInformation, 
+            SYSTEM_MODULE_INFORMATION_CLASS, 
             NULL, 
             0, 
             &returnLength);
@@ -209,7 +208,7 @@ private:
 
         std::vector<uint8_t> buffer(returnLength);
         status = NtQuerySystemInformation(
-            SystemModuleInformation, 
+            SYSTEM_MODULE_INFORMATION_CLASS, 
             buffer.data(), 
             returnLength, 
             &returnLength);
