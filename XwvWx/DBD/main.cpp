@@ -187,24 +187,12 @@ int main() {
     
     std::cout << "[+] Found PlayerArray at: 0x" << std::hex << playerArray << std::dec << "\n";
 
-    // Initialize DirectX overlay and UI
+    // Initialize overlay system
     Overlay overlay;
     if (!overlay.Init()) {
         std::cout << "[-] Failed to initialize overlay.\n";
         CloseHandle(hProc);
         return 1;
-    }
-
-    // Initialize UI system
-    if (!overlay.GetUI().Init(overlay.GetWindow(), overlay.GetDevice(), overlay.GetContext())) {
-        std::cout << "[-] Failed to initialize UI.\n";
-        CloseHandle(hProc);
-        return 1;
-    }
-
-    // Register hotkey for menu toggle (Insert key)
-    if (!RegisterHotKey(NULL, 1, 0, VK_INSERT)) {
-        std::cout << "[!] Failed to register hotkey.\n";
     }
 
     EntityManager entityManager;
@@ -250,79 +238,19 @@ int main() {
     std::thread renderThread([&]() {
         while (running) {
             overlay.BeginScene();
-            
-            auto& config = overlay.GetUI().GetConfig();
-            
-            // Process hotkey messages
-            MSG msg;
-            while (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE)) {
-                if (msg.message == WM_HOTKEY && msg.wParam == 1) {
-                    overlay.GetUI().ToggleMenu();
-                }
-                TranslateMessage(&msg);
-                DispatchMessage(&msg);
-            }
-
-            // Render UI
-            overlay.RenderUI(entityManager.entities);
-            
-            // Render ESP elements
-            if (config.showESP) {
-                for (const auto& entity : entityManager.entities) {
-                    // Convert D3DCOLOR to ImVec4 color
-                    ImVec4 color = entity.isKiller ? config.killerColor : config.survivorColor;
-                    D3DCOLOR entityColor = D3DCOLOR_COLORVALUE(color.x, color.y, color.z, color.w);
-                    
-                    // Draw box around entity
-                    overlay.DrawBox(
-                        entity.position, 
-                        config.espBoxWidth, 
-                        config.espBoxHeight, 
-                        entityColor,
-                        config.showESP
-                    );
-                    
-                    // Draw health bar
-                    if (!entity.isKiller && config.showHealthBars) {
-                        Vector3 healthPos = entity.position;
-                        healthPos.y += 60.0f; // Above the box
-                        overlay.DrawBox(
-                            healthPos, 
-                            config.espBoxWidth * (entity.health / 100.0f), 
-                            5.0f, 
-                            D3DCOLOR_COLORVALUE(
-                                config.healthColor.x,
-                                config.healthColor.y,
-                                config.healthColor.z,
-                                config.healthColor.w
-                            )
-                        );
-                    }
-                    
-                    // Draw name and item
-                    if (config.showRoles || (config.showItems && !entity.isKiller)) {
-                        Vector3 textPos = entity.position;
-                        textPos.y -= 60.0f; // Below the box
-                        overlay.DrawText(textPos, entity.name, entityColor);
-                    }
-                }
-            }
-            
+            overlay.RenderEntities(entityManager.entities);
             overlay.EndScene();
             Sleep(16); // ~60 FPS
         }
     });
 
-    std::cout << "[+] ESP activated! Press Insert to toggle menu, Enter to exit...\n";
+    std::cout << "[+] ESP activated! Press Enter to exit...\n";
     std::cin.get();
     
     running = false;
     monitorThread.join();
     renderThread.join();
     
-    // Cleanup
-    UnregisterHotKey(NULL, 1);
-    overlay.GetUI().Shutdown();
     CloseHandle(hProc);
     return 0;
 }

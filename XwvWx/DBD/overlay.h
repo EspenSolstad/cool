@@ -4,7 +4,6 @@
 #include <DirectXMath.h>
 #include <vector>
 #include "types.h"
-#include "ui.h"
 
 #pragma comment(lib, "d3d11.lib")
 
@@ -13,7 +12,7 @@ using namespace DirectX;
 class Overlay {
 public:
     Overlay() : gameWindow(nullptr), pDevice(nullptr), pContext(nullptr), 
-                pSwapChain(nullptr), renderTarget(nullptr), ui() {}
+                pSwapChain(nullptr), renderTarget(nullptr) {}
     
     bool Init() {
         gameWindow = FindWindowA("DeadByDaylight", nullptr);
@@ -59,16 +58,13 @@ public:
 
     void BeginScene() {
         pContext->OMSetRenderTargets(1, &renderTarget, nullptr);
-        ui.BeginFrame();
     }
 
     void EndScene() {
-        ui.EndFrame();
         pSwapChain->Present(1, 0);
     }
 
-    void DrawBox(const Vector3& pos, float width, float height, D3DCOLOR color, bool enabled = true) {
-        if (!enabled) return;
+    void DrawBox(const Vector3& pos, float width, float height, D3DCOLOR color) {
         RECT windowRect;
         GetClientRect(gameWindow, &windowRect);
         
@@ -83,8 +79,7 @@ public:
         DrawLine(screenX - width/2, screenY + height/2, screenX - width/2, screenY - height/2, color);
     }
 
-    void DrawText(const Vector3& pos, const char* text, D3DCOLOR color, bool enabled = true) {
-        if (!enabled) return;
+    void DrawText(const Vector3& pos, const char* text, D3DCOLOR color) {
         RECT windowRect;
         GetClientRect(gameWindow, &windowRect);
         
@@ -95,11 +90,27 @@ public:
         DrawTextA(screenX, screenY, text, color);
     }
 
-    void RenderUI(const std::vector<ESPEntity>& entities) {
-        ui.Render(entities);
+    void RenderEntities(const std::vector<ESPEntity>& entities) {
+        for (const auto& entity : entities) {
+            D3DCOLOR color = entity.isKiller ? D3DCOLOR_ARGB(255, 255, 0, 0) : D3DCOLOR_ARGB(255, 0, 255, 0);
+            
+            // Draw box around entity
+            DrawBox(entity.position, 50.0f, 100.0f, color);
+            
+            // Draw health bar if not killer
+            if (!entity.isKiller) {
+                Vector3 healthPos = entity.position;
+                healthPos.y += 60.0f; // Above the box
+                DrawBox(healthPos, 50.0f * (entity.health / 100.0f), 5.0f, D3DCOLOR_ARGB(255, 0, 255, 255));
+            }
+            
+            // Draw name
+            Vector3 textPos = entity.position;
+            textPos.y -= 60.0f; // Below the box
+            DrawText(textPos, entity.name, color);
+        }
     }
 
-    UI& GetUI() { return ui; }
     HWND GetWindow() const { return gameWindow; }
     ID3D11Device* GetDevice() const { return pDevice; }
     ID3D11DeviceContext* GetContext() const { return pContext; }
@@ -139,7 +150,7 @@ private:
     }
 
     void DrawTextA(float x, float y, const char* text, D3DCOLOR color) {
-        // Simplified text rendering using GDI for now
+        // Simplified text rendering using GDI
         HDC hdc = GetDC(gameWindow);
         SetTextColor(hdc, RGB((color >> 16) & 0xFF, (color >> 8) & 0xFF, color & 0xFF));
         SetBkMode(hdc, TRANSPARENT);
@@ -152,5 +163,4 @@ private:
     ID3D11DeviceContext* pContext;
     IDXGISwapChain* pSwapChain;
     ID3D11RenderTargetView* renderTarget;
-    UI ui;
 };
