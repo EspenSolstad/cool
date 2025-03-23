@@ -1,6 +1,5 @@
 #include "core/kernel_bridge.hpp"
 #include "utils/logging.hpp"
-#include "utils/kdmapper_impl.hpp" // Add our implementation header
 #include <random>
 #include <chrono>
 
@@ -177,7 +176,7 @@ bool KernelBridge::LoadDriver(const void* driver_data, size_t size) {
         return false;
     }
 
-    // Map the driver using our kdmapper implementation
+    // Map the driver using kdmapper
     bool success = kdmapper::MapDriver(channel_handle, 
         static_cast<BYTE*>(const_cast<void*>(driver_data)), 0, 0, false, true,
         kdmapper::AllocationMode::AllocatePool, false, nullptr, nullptr);
