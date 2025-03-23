@@ -8,13 +8,6 @@
 #include <winternl.h>
 #include <psapi.h>
 
-// Define GetModuleInformation if not available
-typedef struct _MODULEINFO {
-    LPVOID lpBaseOfDll;
-    DWORD SizeOfImage;
-    LPVOID EntryPoint;
-} MODULEINFO, *LPMODULEINFO;
-
 typedef BOOL (WINAPI *GetModuleInformationFn)(
     HANDLE hProcess,
     HMODULE hModule,
@@ -82,20 +75,6 @@ static const ULONG POOL_TAGS[POOL_TAGS_COUNT] = {
     'eFcA', // AcFe - Appears as standard file system cache
     'rDvH'  // HvDr - Hypervisor Driver tag
 };
-
-typedef struct _SYSTEM_BASIC_INFORMATION {
-    ULONG Reserved;
-    ULONG TimerResolution;
-    ULONG PageSize;
-    ULONG NumberOfPhysicalPages;
-    ULONG LowestPhysicalPageNumber;
-    ULONG HighestPhysicalPageNumber;
-    ULONG AllocationGranularity;
-    ULONG_PTR MinimumUserModeAddress;
-    ULONG_PTR MaximumUserModeAddress;
-    ULONG_PTR ActiveProcessorsAffinityMask;
-    UCHAR NumberOfProcessors;
-} SYSTEM_BASIC_INFORMATION, *PSYSTEM_BASIC_INFORMATION;
 
 #define SystemBasicInformation 0
 
@@ -351,7 +330,13 @@ private:
         return ntoskrnlBase;
     }
     
-    // Find usable kernel memory region
+    // Constants for memory search
+    static constexpr uint64_t SEARCH_RANGE_INCREMENT = 64 * 1024 * 1024; // 64MB increments
+    static constexpr uint64_t MAX_SEARCH_RANGE = 16ULL * 1024 * 1024 * 1024; // 16GB max
+    static constexpr int MAX_RETRY_ATTEMPTS = 5;
+    static constexpr uint64_t RETRY_OFFSETS[] = {0x1000, 0x2000, 0x4000, 0x8000, 0x10000};
+
+    // Find usable kernel memory region with enhanced search algorithm
     uint64_t FindUsableKernelMemory(size_t size) {
         if (kernelBase == 0) {
             // Initialize kernel base and size if not done yet
@@ -387,35 +372,51 @@ private:
             FreeLibrary(ntoskrnl);
         }
 
-        // Start searching from last successful allocation or kernel base
-        uint64_t startAddr = lastAllocationEnd ? lastAllocationEnd : kernelBase;
-        uint64_t endAddr = kernelBase + kernelSize + (16 * 1024 * 1024); // Add 16MB buffer
-
-        // Align to allocation granularity
-        startAddr = (startAddr + ALLOCATION_GRANULARITY - 1) & ~(ALLOCATION_GRANULARITY - 1);
+        // Align size to allocation granularity
         size = (size + ALLOCATION_GRANULARITY - 1) & ~(ALLOCATION_GRANULARITY - 1);
 
-        for (uint64_t addr = startAddr; addr < endAddr; addr += ALLOCATION_GRANULARITY) {
-            // Test if memory region is usable
-            std::vector<uint8_t> testBuffer(16, 0);
-            if (WritePhysicalMemory(addr, testBuffer.data(), testBuffer.size())) {
-                // Verify we can read back what we wrote
-                std::vector<uint8_t> readBuffer(16);
-                if (ReadPhysicalMemory(addr, readBuffer.data(), readBuffer.size()) &&
-                    memcmp(testBuffer.data(), readBuffer.data(), testBuffer.size()) == 0) {
-                    
-                    // Found usable memory region
-                    lastAllocationEnd = addr + size;
-                    return addr;
-                }
-            }
+        // Try multiple search ranges
+        for (uint64_t searchRange = SEARCH_RANGE_INCREMENT; searchRange <= MAX_SEARCH_RANGE; searchRange += SEARCH_RANGE_INCREMENT) {
+            uint64_t startAddr = lastAllocationEnd ? lastAllocationEnd : kernelBase;
+            uint64_t endAddr = kernelBase + searchRange;
 
-            // If write failed, try next region with exponential backoff
-            if ((addr - startAddr) >= (1024 * 1024)) { // After 1MB of searching
-                addr += ((addr - startAddr) / 2); // Skip ahead by half the distance searched
+            // Align start address
+            startAddr = (startAddr + ALLOCATION_GRANULARITY - 1) & ~(ALLOCATION_GRANULARITY - 1);
+
+            std::cout << "[*] Searching memory range 0x" << std::hex << startAddr << " - 0x" << endAddr << std::dec << std::endl;
+
+            for (uint64_t addr = startAddr; addr < endAddr; addr += ALLOCATION_GRANULARITY) {
+                // Try each retry offset
+                for (int i = 0; i < MAX_RETRY_ATTEMPTS; i++) {
+                    uint64_t testAddr = addr + RETRY_OFFSETS[i];
+                    
+                    // Test if memory region is usable
+                    std::vector<uint8_t> testBuffer(16, 0);
+                    if (WritePhysicalMemory(testAddr, testBuffer.data(), testBuffer.size())) {
+                        // Verify we can read back what we wrote
+                        std::vector<uint8_t> readBuffer(16);
+                        if (ReadPhysicalMemory(testAddr, readBuffer.data(), readBuffer.size()) &&
+                            memcmp(testBuffer.data(), readBuffer.data(), testBuffer.size()) == 0) {
+                            
+                            // Found usable memory region
+                            lastAllocationEnd = testAddr + size;
+                            std::cout << "[+] Found usable memory at 0x" << std::hex << testAddr << std::dec 
+                                    << " (attempt " << i + 1 << ")" << std::endl;
+                            return testAddr;
+                        }
+                    }
+                }
+
+                // Implement dynamic skipping based on failure patterns
+                if ((addr - startAddr) >= (4 * 1024 * 1024)) { // After 4MB of searching
+                    uint64_t skip = ((addr - startAddr) / 4); // Skip by 1/4 of searched distance
+                    addr += skip;
+                    std::cout << "[*] Skipping ahead by 0x" << std::hex << skip << std::dec << " bytes" << std::endl;
+                }
             }
         }
 
+        std::cerr << "[-] Failed to find usable memory after exhaustive search" << std::endl;
         return 0;
     }
 
