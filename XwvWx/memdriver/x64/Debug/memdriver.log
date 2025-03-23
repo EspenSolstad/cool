@@ -1,0 +1,23 @@
+﻿  Building 'memdriver' with toolset 'WindowsKernelModeDriver10.0' and the 'Universal' target platform.
+  Stamping x64\Debug\memdriver.inf
+  Stamping [Version] section with DriverVer=03/22/2025,16.47.27.144
+  memdriver.c
+  memdriver.vcxproj -> C:\Users\eyesu\OneDrive\Documents\ditwordem\memdriver\x64\Debug\memdriver.sys
+  Done Adding Additional Store
+  Successfully signed: C:\Users\eyesu\OneDrive\Documents\ditwordem\memdriver\x64\Debug\memdriver.sys
+  
+  Driver is 'Universal'.
+  ........................
+  Signability test complete.
+  
+  Errors:
+  None
+  
+  Warnings:
+  None
+  
+  Catalog generation complete.
+  C:\Users\eyesu\OneDrive\Documents\ditwordem\memdriver\x64\Debug\memdriver\memdriver.cat
+  Done Adding Additional Store
+  Successfully signed: C:\Users\eyesu\OneDrive\Documents\ditwordem\memdriver\x64\Debug\memdriver\memdriver.cat
+  

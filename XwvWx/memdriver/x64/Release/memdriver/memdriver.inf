@@ -1,0 +1,62 @@
+;
+; memdriver.inf
+;
+
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = System ; TODO: specify appropriate Class
+ClassGuid   = {4d36e97d-e325-11ce-bfc1-08002be10318} ; TODO: specify appropriate ClassGuid
+Provider    = %ManufacturerName%
+CatalogFile = memdriver.cat
+DriverVer = 03/22/2025,16.48.50.538
+PnpLockdown = 1
+
+[DestinationDirs]
+DefaultDestDir = 13
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+memdriver.sys = 1,,
+
+;*****************************************
+; Install Section
+;*****************************************
+
+[Manufacturer]
+%ManufacturerName% = Standard,NTamd64.10.0...16299 ; %13% support introduced in build 16299
+
+[Standard.NTamd64.10.0...16299]
+%memdriver.DeviceDesc% = memdriver_Device, Root\memdriver ; TODO: edit hw-id
+
+[memdriver_Device.NT]
+CopyFiles = File_Copy
+
+[File_Copy]
+memdriver.sys
+
+;-------------- Service installation
+[memdriver_Device.NT.Services]
+AddService = memdriver,%SPSVCINST_ASSOCSERVICE%, memdriver_Service_Inst
+
+; -------------- memdriver driver install sections
+[memdriver_Service_Inst]
+DisplayName    = %memdriver.SVCDESC%
+ServiceType    = 1               ; SERVICE_KERNEL_DRIVER
+StartType      = 3               ; SERVICE_DEMAND_START
+ErrorControl   = 1               ; SERVICE_ERROR_NORMAL
+ServiceBinary  = %13%\memdriver.sys
+
+[memdriver_Device.NT.Wdf]
+KmdfService = memdriver, memdriver_wdfsect
+
+[memdriver_wdfsect]
+KmdfLibraryVersion = 1.15
+
+[Strings]
+SPSVCINST_ASSOCSERVICE = 0x00000002
+ManufacturerName = "<Your manufacturer name>" ;TODO: Replace with your manufacturer name
+DiskName = "memdriver Installation Disk"
+memdriver.DeviceDesc = "memdriver Device"
+memdriver.SVCDESC = "memdriver Service"
