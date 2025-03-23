@@ -35,6 +35,10 @@ const std::wstring MEMORY_DRIVER_PATH = L"..\\..\\memdriver\\x64\\Release\\memdr
 #define STATUS_SUCCESS ((NTSTATUS)0x00000000L)
 #define STATUS_UNSUCCESSFUL ((NTSTATUS)0xC0000001L)
 
+// Windows section view constants
+#define ViewShare 1
+#define ViewUnmap 2
+
 // External NT function declarations
 extern "C" {
     NTSTATUS NTAPI NtOpenSection(
@@ -60,12 +64,13 @@ extern "C" {
         IN HANDLE ProcessHandle,
         IN PVOID BaseAddress
     );
-
-    NTSTATUS NTAPI RtlInitUnicodeString(
-        PUNICODE_STRING DestinationString,
-        PCWSTR SourceString
-    );
 }
+
+// Use the existing RtlInitUnicodeString from ntdll
+extern "C" VOID NTAPI RtlInitUnicodeString(
+    PUNICODE_STRING DestinationString,
+    PCWSTR SourceString
+);
 
 // Manual mapping class
 class ManualMapper {
