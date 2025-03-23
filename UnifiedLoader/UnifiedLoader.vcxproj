@@ -76,10 +76,10 @@
       <EntryPointSymbol>mainCRTStartup</EntryPointSymbol>
     </Link>
     <PreBuildEvent>
-      <Command>mkdir "$(ProjectDir)include\drivers" 2&gt;nul || exit 0
-"$(SolutionDir)bin\$(Configuration)\bin2header.exe" "$(ProjectDir)src\drivers\memdriver.sys" "$(ProjectDir)include\drivers\memdriver.hpp" memdriver
-"$(SolutionDir)bin\$(Configuration)\bin2header.exe" "$(ProjectDir)src\drivers\RwDrv.sys" "$(ProjectDir)include\drivers\rwdrv.hpp" rwdrv
-"$(SolutionDir)bin\$(Configuration)\bin2header.exe" "$(ProjectDir)src\drivers\ExternalCheat.exe" "$(ProjectDir)include\drivers\cheat.hpp" cheat</Command>
+      <Command>if not exist "$(ProjectDir)include\drivers" mkdir "$(ProjectDir)include\drivers"
+$(SolutionDir)bin\$(Configuration)\bin2header.exe "$(ProjectDir)src\drivers\memdriver.sys" "$(ProjectDir)include\drivers\memdriver.hpp" memdriver
+$(SolutionDir)bin\$(Configuration)\bin2header.exe "$(ProjectDir)src\drivers\RwDrv.sys" "$(ProjectDir)include\drivers\rwdrv.hpp" rwdrv
+$(SolutionDir)bin\$(Configuration)\bin2header.exe "$(ProjectDir)src\drivers\ExternalCheat.exe" "$(ProjectDir)include\drivers\cheat.hpp" cheat</Command>
     </PreBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -109,10 +109,10 @@
       <EntryPointSymbol>mainCRTStartup</EntryPointSymbol>
     </Link>
     <PreBuildEvent>
-      <Command>mkdir "$(ProjectDir)include\drivers" 2&gt;nul || exit 0
-"$(SolutionDir)bin\$(Configuration)\bin2header.exe" "$(ProjectDir)src\drivers\memdriver.sys" "$(ProjectDir)include\drivers\memdriver.hpp" memdriver
-"$(SolutionDir)bin\$(Configuration)\bin2header.exe" "$(ProjectDir)src\drivers\RwDrv.sys" "$(ProjectDir)include\drivers\rwdrv.hpp" rwdrv
-"$(SolutionDir)bin\$(Configuration)\bin2header.exe" "$(ProjectDir)src\drivers\ExternalCheat.exe" "$(ProjectDir)include\drivers\cheat.hpp" cheat</Command>
+      <Command>if not exist "$(ProjectDir)include\drivers" mkdir "$(ProjectDir)include\drivers"
+$(SolutionDir)bin\$(Configuration)\bin2header.exe "$(ProjectDir)src\drivers\memdriver.sys" "$(ProjectDir)include\drivers\memdriver.hpp" memdriver
+$(SolutionDir)bin\$(Configuration)\bin2header.exe "$(ProjectDir)src\drivers\RwDrv.sys" "$(ProjectDir)include\drivers\rwdrv.hpp" rwdrv
+$(SolutionDir)bin\$(Configuration)\bin2header.exe "$(ProjectDir)src\drivers\ExternalCheat.exe" "$(ProjectDir)include\drivers\cheat.hpp" cheat</Command>
     </PreBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
