@@ -13,7 +13,7 @@
   <PropertyGroup Label="Globals">
     <VCProjectVersion>17.0</VCProjectVersion>
     <Keyword>Win32Proj</Keyword>
-    <ProjectGuid>{56a0fbe1-264c-47ea-bc05-5fc7aa4e8787}</ProjectGuid>
+    <ProjectGuid>{a2c0e217-91d6-4917-b318-6974b5f5e81e}</ProjectGuid>
     <RootNamespace>GDRVMapper</RootNamespace>
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
   </PropertyGroup>
@@ -54,7 +54,6 @@
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <UACExecutionLevel>RequireAdministrator</UACExecutionLevel>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -66,18 +65,27 @@
       <PreprocessorDefinitions>NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp17</LanguageStandard>
-      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <UACExecutionLevel>RequireAdministrator</UACExecutionLevel>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="GDRVMapper.cpp" />
+    <ClCompile Include="KernelMemory.cpp" />
+    <ClCompile Include="main.cpp" />
+    <ClCompile Include="PageTableUtils.cpp" />
+    <ClCompile Include="ShellcodeUtils.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="GDRVMapper.h" />
+    <ClInclude Include="GDRVTypes.h" />
+    <ClInclude Include="KernelMemory.h" />
+    <ClInclude Include="PageTableUtils.h" />
+    <ClInclude Include="ShellcodeUtils.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
