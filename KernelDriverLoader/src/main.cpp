@@ -4,11 +4,6 @@
 #include <memory>
 #include <vector>
 #include <filesystem>
-#include <fstream>
-#include <conio.h>
-#include <shlobj.h>
-#include <limits>
-#include <algorithm>
 #include "../includes/utils/logging.hpp"
 #include "../includes/utils/resource_utils.hpp"
 #include "../includes/utils/intel_driver.hpp"

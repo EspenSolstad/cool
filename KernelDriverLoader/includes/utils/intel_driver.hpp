@@ -69,9 +69,6 @@ public:
     // Get the version of Windows
     static uint32_t GetWindowsVersion();
 
-    // Device IO control (made public for kernel_bridge.cpp)
-    bool DeviceIoControl(DWORD ioControlCode, void* inBuffer, DWORD inBufferSize, void* outBuffer, DWORD outBufferSize, DWORD* bytesReturned = nullptr);
-
 private:
     // Device handle
     HANDLE m_deviceHandle;
@@ -87,6 +84,9 @@ private:
     
     // Clean up after driver usage
     void Cleanup();
+    
+    // Device IO control
+    bool DeviceIoControl(DWORD ioControlCode, void* inBuffer, DWORD inBufferSize, void* outBuffer, DWORD outBufferSize, DWORD* bytesReturned = nullptr);
 };
 
 // Single globally accessible pointer to the Intel driver instance

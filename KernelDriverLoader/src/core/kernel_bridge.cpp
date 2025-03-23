@@ -1,10 +1,6 @@
 #include "../../includes/core/kernel_bridge.hpp"
 #include <random>
 
-// External references to global instances
-extern std::unique_ptr<KDMapper> g_kdMapper;
-extern std::unique_ptr<IntelDriver> g_intelDriver;
-
 // Static instance for singleton
 KernelBridge& KernelBridge::GetInstance() {
     static KernelBridge instance;

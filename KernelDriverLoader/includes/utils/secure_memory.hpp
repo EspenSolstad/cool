@@ -3,7 +3,6 @@
 #include <memory>
 #include <vector>
 #include <string>
-#include <stdexcept>
 
 // Enum for allocation modes
 enum class AllocationMode {
@@ -92,9 +91,6 @@ private:
 
 // Global helper functions for memory allocation
 namespace memory {
-    // Forward declaration of SecureWipe function
-    void SecureWipe(void* memory, size_t size);
-    
     // Allocate memory (simple or secure)
     inline void* Allocate(size_t size, AllocationMode mode = AllocationMode::AllocatePool) {
         if (size == 0) return nullptr;

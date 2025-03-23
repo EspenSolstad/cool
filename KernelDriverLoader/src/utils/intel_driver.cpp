@@ -1,5 +1,5 @@
 #include "../../includes/utils/intel_driver.hpp"
-#include "../../resources/resource.h"
+#include "../../includes/resources/resource.h"
 
 // Global instance
 std::unique_ptr<IntelDriver> g_intelDriver;
