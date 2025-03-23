@@ -7,6 +7,36 @@
 #include <filesystem>
 #include <cstdint>
 #include <memory>
+#include <winternl.h>
+
+// Adding required NT definitions that might be missing
+#ifndef NT_SUCCESS
+#define NT_SUCCESS(Status) (((NTSTATUS)(Status)) >= 0)
+#endif
+
+// Define required NT structures if they're not in winternl.h
+#ifndef _UNICODE_STRING_DEFINED
+typedef struct _UNICODE_STRING {
+    USHORT Length;
+    USHORT MaximumLength;
+    PWSTR  Buffer;
+} UNICODE_STRING, *PUNICODE_STRING;
+#endif
+
+#ifndef _PROCESS_BASIC_INFORMATION_DEFINED
+typedef struct _PROCESS_BASIC_INFORMATION {
+    PVOID Reserved1;
+    PVOID PebBaseAddress;
+    PVOID Reserved2[2];
+    ULONG_PTR UniqueProcessId;
+    PVOID Reserved3;
+} PROCESS_BASIC_INFORMATION, *PPROCESS_BASIC_INFORMATION;
+#endif
+
+typedef enum _PROCESSINFOCLASS {
+    ProcessBasicInformation = 0,
+    // ... other values not needed for this application
+} PROCESSINFOCLASS;
 
 // PE structure definitions
 #pragma warning(disable : 4201)
@@ -518,15 +548,17 @@ int main() {
             DWORD result = 0;
             HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
             if (snapshot != INVALID_HANDLE_VALUE) {
-                PROCESSENTRY32 entry;
+                PROCESSENTRY32W entry;
                 entry.dwSize = sizeof(entry);
-                if (Process32First(snapshot, &entry)) {
+                if (Process32FirstW(snapshot, &entry)) {
                     do {
-                        if (_stricmp(entry.szExeFile, "DeadByDaylight-Win64-Shipping.exe") == 0) {
+                        // Convert wide string to narrow for comparison
+                        wchar_t targetProcess[] = L"DeadByDaylight-Win64-Shipping.exe";
+                        if (wcscmp(entry.szExeFile, targetProcess) == 0) {
                             result = entry.th32ProcessID;
                             break;
                         }
-                    } while (Process32Next(snapshot, &entry));
+                    } while (Process32NextW(snapshot, &entry));
                 }
                 CloseHandle(snapshot);
             }
