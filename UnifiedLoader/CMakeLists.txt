@@ -43,9 +43,10 @@ set(SOURCES
     src/core/dynamic_mapper.cpp
     src/core/kernel_bridge.cpp
     src/utils/intel_driver.cpp
-    src/utils/kdmapper.cpp
+    src/utils/kdmapper_impl.cpp
     src/utils/portable_executable.cpp
     src/utils/utils.cpp
+    src/utils/secure_memory.cpp
     src/main.cpp
 )
 

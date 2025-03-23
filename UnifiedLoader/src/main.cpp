@@ -5,6 +5,7 @@
 #include "drivers/rwdrv.hpp"
 #include "drivers/cheat.hpp"
 #include "utils/logging.hpp"
+#include "utils/secure_memory.hpp"
 #include <Windows.h>
 #include <memory>
 #include <thread>
