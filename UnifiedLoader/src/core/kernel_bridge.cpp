@@ -1,7 +1,8 @@
 #include "core/kernel_bridge.hpp"
 #include "utils/logging.hpp"
-#include <algorithm>
+#include "utils/kdmapper_impl.hpp" // Add our implementation header
 #include <random>
+#include <chrono>
 
 KernelBridge& KernelBridge::GetInstance() {
     static KernelBridge instance;
@@ -13,22 +14,24 @@ bool KernelBridge::EstablishSecureChannel() {
         return true;
     }
 
-    LOG_INFO("Establishing secure channel to kernel...");
+    LOG_INFO("Establishing secure channel...");
 
-    // Initialize encryption for the channel
-    if (!EstablishEncryptedChannel()) {
-        LOG_ERROR("Failed to initialize secure channel encryption");
-        return false;
-    }
+    // Generate new encryption keys for this session
+    channel_key = EncryptionKey();
 
-    // Open the driver handle
+    // Create secure channel handle
     channel_handle = intel_driver::Load();
     if (channel_handle == INVALID_HANDLE_VALUE) {
-        LOG_ERROR("Failed to open kernel channel");
+        LOG_ERROR("Failed to load intel driver");
         return false;
     }
 
-    // Validate the integrity of the channel
+    if (!EstablishEncryptedChannel()) {
+        LOG_ERROR("Failed to establish encrypted channel");
+        CloseChannel();
+        return false;
+    }
+
     if (!ValidateChannelIntegrity()) {
         LOG_ERROR("Channel integrity validation failed");
         CloseChannel();
@@ -40,13 +43,98 @@ bool KernelBridge::EstablishSecureChannel() {
     return true;
 }
 
+bool KernelBridge::SendCommand(const void* cmd, size_t size) {
+    if (!is_initialized || !cmd || !size) {
+        LOG_ERROR("Invalid command parameters");
+        return false;
+    }
+
+    std::vector<uint8_t> encrypted;
+    if (!EncryptPayload(cmd, size, encrypted)) {
+        LOG_ERROR("Failed to encrypt command");
+        return false;
+    }
+
+    // Send encrypted command to kernel
+    bool success = intel_driver::WriteMemory(channel_handle, 
+        intel_driver::GetKernelModuleExport(channel_handle, intel_driver::ntoskrnlAddr, "NtQuerySystemInformation"),
+        encrypted.data(), encrypted.size());
+
+    if (!success) {
+        LOG_ERROR("Failed to send command");
+    }
+
+    return success;
+}
+
+bool KernelBridge::ReceiveResponse(void* response, size_t size) {
+    if (!is_initialized || !response || !size) {
+        LOG_ERROR("Invalid response parameters");
+        return false;
+    }
+
+    std::vector<uint8_t> encrypted(size);
+    
+    // Read encrypted response from kernel
+    if (!intel_driver::WriteMemory(channel_handle,
+        intel_driver::GetKernelModuleExport(channel_handle, intel_driver::ntoskrnlAddr, "NtQuerySystemInformation"),
+        encrypted.data(), encrypted.size())) {
+        LOG_ERROR("Failed to receive response");
+        return false;
+    }
+
+    std::vector<uint8_t> decrypted;
+    if (!DecryptPayload(encrypted.data(), encrypted.size(), decrypted)) {
+        LOG_ERROR("Failed to decrypt response");
+        return false;
+    }
+
+    if (decrypted.size() != size) {
+        LOG_ERROR("Response size mismatch");
+        return false;
+    }
+
+    memcpy(response, decrypted.data(), size);
+    return true;
+}
+
+void KernelBridge::CloseChannel() {
+    if (!is_initialized) {
+        return;
+    }
+
+    LOG_INFO("Closing secure channel...");
+
+    SecureChannelCleanup();
+
+    if (channel_handle != INVALID_HANDLE_VALUE) {
+        intel_driver::Unload(channel_handle);
+        channel_handle = INVALID_HANDLE_VALUE;
+    }
+
+    // Clear encryption keys
+    volatile uint8_t* key_data = channel_key.key.data();
+    volatile uint8_t* iv_data = channel_key.iv.data();
+    
+    for (size_t i = 0; i < channel_key.key.size(); i++) {
+        key_data[i] = 0;
+    }
+    for (size_t i = 0; i < channel_key.iv.size(); i++) {
+        iv_data[i] = 0;
+    }
+
+    is_initialized = false;
+    LOG_SUCCESS("Channel closed successfully");
+}
+
 bool KernelBridge::ReadKernelMemory(ULONGLONG address, void* buffer, size_t size) {
     if (!is_initialized || !buffer || !size) {
         return false;
     }
 
-    // Obfuscate memory access to avoid detection
-    ObfuscateMemoryAccess(address, size);
+    if (!ObfuscateMemoryAccess(address, size)) {
+        return false;
+    }
 
     return intel_driver::ReadMemory(channel_handle, address, buffer, size);
 }
@@ -56,11 +144,11 @@ bool KernelBridge::WriteKernelMemory(ULONGLONG address, const void* buffer, size
         return false;
     }
 
-    // Obfuscate memory access to avoid detection
-    ObfuscateMemoryAccess(address, size);
+    if (!ObfuscateMemoryAccess(address, size)) {
+        return false;
+    }
 
-    // Need to cast away const-ness due to intel_driver::WriteMemory signature
-    return intel_driver::WriteMemory(channel_handle, address, const_cast<void*>(buffer), size);
+    return intel_driver::WriteMemory(channel_handle, address, buffer, size);
 }
 
 ULONGLONG KernelBridge::AllocateKernelMemory(size_t size) {
@@ -68,7 +156,7 @@ ULONGLONG KernelBridge::AllocateKernelMemory(size_t size) {
         return 0;
     }
 
-    return intel_driver::AllocatePool(channel_handle, nt::POOL_TYPE::NonPagedPool, size);
+    return intel_driver::AllocatePool(channel_handle, nt::NonPagedPool, size);
 }
 
 bool KernelBridge::FreeKernelMemory(ULONGLONG address) {
@@ -84,40 +172,21 @@ bool KernelBridge::LoadDriver(const void* driver_data, size_t size) {
         return false;
     }
 
-    // Verify driver signature before loading
     if (!VerifyDriverSignature(driver_data, size)) {
         LOG_ERROR("Driver signature verification failed");
         return false;
     }
 
-    std::vector<uint8_t> encrypted;
-    if (!EncryptPayload(driver_data, size, encrypted)) {
-        LOG_ERROR("Failed to encrypt driver data");
-        return false;
-    }
+    // Map the driver using our kdmapper implementation
+    bool success = kdmapper::MapDriver(channel_handle, 
+        static_cast<BYTE*>(const_cast<void*>(driver_data)), 0, 0, false, true,
+        kdmapper::AllocationMode::AllocatePool, false, nullptr, nullptr);
 
-    // Use KDMapper to load the driver
-    ULONGLONG base = kdmapper::MapDriver(
-        channel_handle, 
-        reinterpret_cast<BYTE*>(encrypted.data()), 
-        0, 0, // Params
-        true, // Free memory after mapping
-        false, // Don't destroy headers
-        kdmapper::AllocationMode::AllocatePool,
-        false, // Don't pass allocation address
-        nullptr, // No callback
-        nullptr // No exit code
-    );
-
-    if (!base) {
+    if (!success) {
         LOG_ERROR("Failed to map driver");
         return false;
     }
 
-    // Hide the driver from PatchGuard
-    HideDriverFromPatchGuard(base);
-
-    LOG_SUCCESS("Driver loaded successfully at 0x" + std::to_string(base));
     return true;
 }
 
@@ -126,112 +195,78 @@ bool KernelBridge::UnloadDriver(ULONGLONG base_address) {
         return false;
     }
 
-    // Implementation for driver unloading would go here
-    // This is typically more complex than just freeing memory
+    // Implement driver unloading
     return true;
 }
 
-void KernelBridge::CloseChannel() {
-    if (channel_handle != INVALID_HANDLE_VALUE) {
-        SecureChannelCleanup();
-        intel_driver::Unload(channel_handle);
-        channel_handle = INVALID_HANDLE_VALUE;
-        is_initialized = false;
-    }
-}
-
-bool KernelBridge::SendCommand(const void* cmd, size_t size) {
-    if (!is_initialized || !cmd || !size) {
+bool KernelBridge::GetDriverInfo(ULONGLONG base_address, void* info, size_t info_size) {
+    if (!is_initialized || !base_address || !info || !info_size) {
         return false;
     }
 
-    std::vector<uint8_t> encrypted;
-    if (!EncryptPayload(cmd, size, encrypted)) {
-        return false;
-    }
-
-    // Implementation for sending commands to driver
-    // Would use DeviceIoControl or similar mechanism
+    // Implement driver info retrieval
     return true;
 }
-
-bool KernelBridge::ReceiveResponse(void* response, size_t size) {
-    if (!is_initialized || !response || !size) {
-        return false;
-    }
-
-    // Implementation for receiving responses from driver
-    std::vector<uint8_t> encrypted;
-    // Would receive encrypted data and decrypt it
-    std::vector<uint8_t> decrypted;
-    if (!DecryptPayload(encrypted.data(), encrypted.size(), decrypted)) {
-        return false;
-    }
-
-    // Copy decrypted data to response buffer
-    memcpy(response, decrypted.data(), std::min(size, decrypted.size()));
-    return true;
-}
-
-// Private methods for security implementations
 
 bool KernelBridge::EncryptPayload(const void* input, size_t input_size, std::vector<uint8_t>& output) {
-    output.resize(input_size);
-    
-    // Simple XOR encryption for demonstration
-    const uint8_t* input_bytes = static_cast<const uint8_t*>(input);
-    for (size_t i = 0; i < input_size; i++) {
-        size_t key_idx = i % channel_key.key.size();
-        size_t iv_idx = i % channel_key.iv.size();
-        output[i] = input_bytes[i] ^ channel_key.key[key_idx] ^ channel_key.iv[iv_idx];
+    if (!input || !input_size) {
+        return false;
     }
-    
+
+    output.resize(input_size);
+
+    // XOR encryption with dynamic key generation
+    for (size_t i = 0; i < input_size; i++) {
+        uint8_t key_byte = channel_key.key[i % channel_key.key.size()];
+        uint8_t iv_byte = channel_key.iv[i % channel_key.iv.size()];
+        output[i] = static_cast<const uint8_t*>(input)[i] ^ key_byte ^ iv_byte;
+    }
+
     return true;
 }
 
 bool KernelBridge::DecryptPayload(const void* input, size_t input_size, std::vector<uint8_t>& output) {
-    output.resize(input_size);
-    
-    // Simple XOR decryption (same as encryption for XOR)
-    const uint8_t* input_bytes = static_cast<const uint8_t*>(input);
-    for (size_t i = 0; i < input_size; i++) {
-        size_t key_idx = i % channel_key.key.size();
-        size_t iv_idx = i % channel_key.iv.size();
-        output[i] = input_bytes[i] ^ channel_key.key[key_idx] ^ channel_key.iv[iv_idx];
+    if (!input || !input_size) {
+        return false;
     }
-    
+
+    output.resize(input_size);
+
+    // Reverse XOR encryption
+    for (size_t i = 0; i < input_size; i++) {
+        uint8_t key_byte = channel_key.key[i % channel_key.key.size()];
+        uint8_t iv_byte = channel_key.iv[i % channel_key.iv.size()];
+        output[i] = static_cast<const uint8_t*>(input)[i] ^ key_byte ^ iv_byte;
+    }
+
     return true;
 }
 
 bool KernelBridge::VerifyDriverSignature(const void* driver_data, size_t size) {
-    // Implementation for driver signature verification
-    // Would check digital signatures or other verification methods
+    // Implement driver signature verification
     return true;
 }
 
 bool KernelBridge::ObfuscateMemoryAccess(ULONGLONG address, size_t size) {
-    // Implementation for obfuscating memory accesses
-    // to avoid detection by kernel anti-cheat systems
+    // Implement memory access obfuscation
     return true;
 }
 
 bool KernelBridge::HideDriverFromPatchGuard(ULONGLONG base_address) {
-    // Implementation for hiding the driver from PatchGuard
-    // May involve modifying certain structures or hooking functions
+    // Implement PatchGuard evasion
     return true;
 }
 
 bool KernelBridge::EstablishEncryptedChannel() {
-    // Implementation for setting up the encrypted channel
+    // Implement encrypted channel establishment
     return true;
 }
 
 bool KernelBridge::ValidateChannelIntegrity() {
-    // Implementation for validating the integrity of the channel
+    // Implement channel integrity validation
     return true;
 }
 
 void KernelBridge::SecureChannelCleanup() {
-    // Implementation for secure cleanup of the channel
-    // Wipe encryption keys and sensitive data
+    // Implement secure cleanup
 }
