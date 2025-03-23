@@ -90,4 +90,4 @@ private:
 };
 
 // Single globally accessible pointer to the Intel driver instance
-extern std::unique_ptr<IntelDriver, std::default_delete<IntelDriver>> g_intelDriver;
+extern std::unique_ptr<IntelDriver> g_intelDriver;

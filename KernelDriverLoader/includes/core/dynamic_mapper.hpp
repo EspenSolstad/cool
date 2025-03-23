@@ -78,4 +78,4 @@ private:
 };
 
 // Global instance for easier access
-extern std::unique_ptr<DynamicMapper, std::default_delete<DynamicMapper>> g_dynamicMapper;
+extern std::unique_ptr<DynamicMapper> g_dynamicMapper;
