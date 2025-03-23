@@ -77,8 +77,8 @@ void Cleanup() {
     Logger::LogInfo("Cleaning up resources...");
     
     // Unmap any loaded drivers
-    if (g_dynamicMapper && g_dynamicMapper->IsDriverMapped()) {
-        if (g_dynamicMapper->UnmapDriver()) {
+    if (g_dynamicMapper && g_dynamicMapper.get()->IsDriverMapped()) {
+        if (g_dynamicMapper.get()->UnmapDriver()) {
             Logger::LogInfo("Dynamic driver unmapped successfully");
         }
         else {
@@ -125,12 +125,12 @@ bool MapIntelDriver() {
     Logger::LogInfo("Mapping Intel driver...");
     
     uint64_t driverBase = 0;
-    if (g_kdMapper->MapDriverFromResource(DRIVER_INTEL_RESOURCE, &driverBase)) {
+    if (g_kdMapper.get()->MapDriverFromResource(DRIVER_INTEL_RESOURCE, &driverBase)) {
         Logger::LogInfo("Intel driver mapped successfully at 0x{:X}", driverBase);
         return true;
     }
     else {
-        Logger::LogError("Failed to map Intel driver: {}", g_kdMapper->GetLastErrorMessage());
+        Logger::LogError("Failed to map Intel driver: {}", g_kdMapper.get()->GetLastErrorMessage());
         return false;
     }
 }
@@ -140,12 +140,12 @@ bool MapRwDrvDriver() {
     Logger::LogInfo("Mapping RwDrv driver...");
     
     uint64_t driverBase = 0;
-    if (g_kdMapper->MapDriverFromResource(DRIVER_RWDRV_RESOURCE, &driverBase)) {
+    if (g_kdMapper.get()->MapDriverFromResource(DRIVER_RWDRV_RESOURCE, &driverBase)) {
         Logger::LogInfo("RwDrv driver mapped successfully at 0x{:X}", driverBase);
         return true;
     }
     else {
-        Logger::LogError("Failed to map RwDrv driver: {}", g_kdMapper->GetLastErrorMessage());
+        Logger::LogError("Failed to map RwDrv driver: {}", g_kdMapper.get()->GetLastErrorMessage());
         return false;
     }
 }
@@ -155,12 +155,12 @@ bool MapMemDriver() {
     Logger::LogInfo("Mapping MemDriver...");
     
     uint64_t driverBase = 0;
-    if (g_kdMapper->MapDriverFromResource(DRIVER_MAPPER_RESOURCE, &driverBase)) {
+    if (g_kdMapper.get()->MapDriverFromResource(DRIVER_MAPPER_RESOURCE, &driverBase)) {
         Logger::LogInfo("MemDriver mapped successfully at 0x{:X}", driverBase);
         return true;
     }
     else {
-        Logger::LogError("Failed to map MemDriver: {}", g_kdMapper->GetLastErrorMessage());
+        Logger::LogError("Failed to map MemDriver: {}", g_kdMapper.get()->GetLastErrorMessage());
         return false;
     }
 }
@@ -170,12 +170,12 @@ bool MapCheatDriver() {
     Logger::LogInfo("Mapping Cheat driver...");
     
     uint64_t driverBase = 0;
-    if (g_kdMapper->MapDriverFromResource(DRIVER_CHEAT_RESOURCE, &driverBase)) {
+    if (g_kdMapper.get()->MapDriverFromResource(DRIVER_CHEAT_RESOURCE, &driverBase)) {
         Logger::LogInfo("Cheat driver mapped successfully at 0x{:X}", driverBase);
         return true;
     }
     else {
-        Logger::LogError("Failed to map Cheat driver: {}", g_kdMapper->GetLastErrorMessage());
+        Logger::LogError("Failed to map Cheat driver: {}", g_kdMapper.get()->GetLastErrorMessage());
         return false;
     }
 }
@@ -212,32 +212,32 @@ bool MapCustomDriver() {
     
     // Map the driver
     uint64_t driverBase = 0;
-    if (g_kdMapper->MapDriver(driverData.data(), driverData.size(), &driverBase)) {
+    if (g_kdMapper.get()->MapDriver(driverData.data(), driverData.size(), &driverBase)) {
         Logger::LogInfo("Custom driver mapped successfully at 0x{:X}", driverBase);
         return true;
     }
     else {
-        Logger::LogError("Failed to map custom driver: {}", g_kdMapper->GetLastErrorMessage());
+        Logger::LogError("Failed to map custom driver: {}", g_kdMapper.get()->GetLastErrorMessage());
         return false;
     }
 }
 
 // Handle driver unmapping
 bool UnmapDriver() {
-    if (!g_dynamicMapper->IsDriverMapped()) {
+    if (!g_dynamicMapper.get()->IsDriverMapped()) {
         Logger::LogWarning("No driver is currently mapped");
         return false;
     }
     
-    uint64_t driverBase = g_dynamicMapper->GetMappedDriverBase();
+    uint64_t driverBase = g_dynamicMapper.get()->GetMappedDriverBase();
     Logger::LogInfo("Unmapping driver at 0x{:X}...", driverBase);
     
-    if (g_dynamicMapper->UnmapDriver()) {
+    if (g_dynamicMapper.get()->UnmapDriver()) {
         Logger::LogInfo("Driver unmapped successfully");
         return true;
     }
     else {
-        Logger::LogError("Failed to unmap driver: {}", g_dynamicMapper->GetLastErrorMessage());
+        Logger::LogError("Failed to unmap driver: {}", g_dynamicMapper.get()->GetLastErrorMessage());
         return false;
     }
 }
