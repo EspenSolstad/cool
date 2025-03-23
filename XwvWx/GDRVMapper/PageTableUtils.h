@@ -20,6 +20,14 @@ public:
         std::function<bool(const void*, size_t, uint64_t*)> executeShellcode
     );
 
+    // Make memory writable by patching its PTE
+    static bool MakeMemoryWritable(
+        uint64_t virtualAddr,
+        const MemoryReadFn& readMemory,
+        const MemoryWriteFn& writeMemory,
+        std::function<bool(const void*, size_t, uint64_t*)> executeShellcode
+    );
+
 private:
     // Page table manipulation helpers
     static bool GetCR3Value(

@@ -38,6 +38,10 @@ private:
     bool MapDriverWithExecPatch(const std::string& driverPath, uint64_t& baseAddress);
     bool ExecuteKernelShellcode(const void* shellcode, size_t size, uint64_t* result = nullptr);
     
+    // Memory search helpers
+    uint64_t TryWritableRegion(uint64_t startAddr);
+    uint64_t cachedWritableAddr;
+
     // Memory constants
     static constexpr uint64_t PAGE_SIZE = 0x1000;
     static constexpr uint64_t ALLOCATION_GRANULARITY = 0x10000;
