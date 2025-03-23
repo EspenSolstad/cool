@@ -4,15 +4,6 @@
 #include <vector>
 #include "../utils/logging.hpp"
 #include "../utils/secure_memory.hpp"
-
-// Forward declarations
-class PortableExecutable;
-class DynamicMapper;
-
-// Global instance for easier access
-extern std::unique_ptr<DynamicMapper> g_dynamicMapper;
-
-// Include after forward declarations
 #include "../utils/kdmapper.hpp"
 #include "../utils/portable_executable.hpp"
 
@@ -85,3 +76,6 @@ private:
     // Set the last error message
     void SetLastError(const std::string& errorMessage);
 };
+
+// Global instance for easier access
+extern std::unique_ptr<DynamicMapper> g_dynamicMapper;

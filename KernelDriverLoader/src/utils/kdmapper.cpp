@@ -19,12 +19,12 @@ KDMapper::~KDMapper() {
 
 // Map a driver from memory
 bool KDMapper::MapDriver(void* driverBuffer, size_t driverSize, ULONG64* pOutModuleBase) {
-    if (m_intelDriver == nullptr || m_intelDriver->IsLoaded() == false) {
+    if (!m_intelDriver || !m_intelDriver->IsLoaded()) {
         SetLastError("Intel driver not loaded");
         return false;
     }
 
-    if (driverBuffer == nullptr || driverSize == 0) {
+    if (!driverBuffer || driverSize == 0) {
         SetLastError("Invalid driver buffer or size");
         return false;
     }
@@ -33,7 +33,7 @@ bool KDMapper::MapDriver(void* driverBuffer, size_t driverSize, ULONG64* pOutMod
 
     // Create a PE wrapper for the driver
     PortableExecutable pe(driverBuffer, driverSize);
-    if (pe.IsValid() == false) {
+    if (!pe.IsValid()) {
         SetLastError("Invalid PE file");
         return false;
     }
@@ -55,13 +55,13 @@ bool KDMapper::MapDriver(void* driverBuffer, size_t driverSize, ULONG64* pOutMod
     Logger::LogInfo("Found kernel space at 0x{:X} for driver", driverBase);
 
     // Map the driver sections into kernel memory
-    if (MapDriverSections(pe, reinterpret_cast<uint64_t>(driverBuffer), driverBase) == false) {
+    if (!MapDriverSections(pe, reinterpret_cast<uint64_t>(driverBuffer), driverBase)) {
         SetLastError("Failed to map driver sections");
         return false;
     }
 
     // Resolve imports
-    if (ResolveImports(pe, driverBase) == false) {
+    if (!ResolveImports(pe, driverBase)) {
         SetLastError("Failed to resolve imports");
         return false;
     }
@@ -73,14 +73,14 @@ bool KDMapper::MapDriver(void* driverBuffer, size_t driverSize, ULONG64* pOutMod
     if (originalBase != driverBase) {
         Logger::LogInfo("Applying relocations (delta: 0x{:X})...", driverBase - originalBase);
         
-        if (ApplyRelocations(pe, driverBase, driverBase - originalBase) == false) {
+        if (!ApplyRelocations(pe, driverBase, driverBase - originalBase)) {
             SetLastError("Failed to apply relocations");
             return false;
         }
     }
 
     // Call the driver entry point
-    if (CallEntryPoint(driverBase, imageSize) == false) {
+    if (!CallEntryPoint(driverBase, imageSize)) {
         SetLastError("Failed to call driver entry point");
         return false;
     }
@@ -98,7 +98,7 @@ bool KDMapper::MapDriver(void* driverBuffer, size_t driverSize, ULONG64* pOutMod
 bool KDMapper::MapDriver(const std::wstring& driverPath, ULONG64* pOutModuleBase) {
     // Read the driver file
     std::ifstream file(driverPath, std::ios::binary | std::ios::ate);
-    if (file.is_open() == false) {
+    if (!file) {
         SetLastError("Failed to open driver file: " + std::string(driverPath.begin(), driverPath.end()));
         return false;
     }
@@ -109,7 +109,7 @@ bool KDMapper::MapDriver(const std::wstring& driverPath, ULONG64* pOutModuleBase
 
     // Allocate a buffer for the file data
     std::vector<uint8_t> buffer(size);
-    if (file.read(reinterpret_cast<char*>(buffer.data()), size) == false) {
+    if (!file.read(reinterpret_cast<char*>(buffer.data()), size)) {
         SetLastError("Failed to read driver file");
         return false;
     }
@@ -139,7 +139,7 @@ bool KDMapper::MapDriverFromResource(int resourceId, ULONG64* pOutModuleBase) {
 
 // Unmap a mapped driver
 bool KDMapper::UnmapDriver(ULONG64 moduleBase) {
-    if (m_intelDriver == nullptr || m_intelDriver->IsLoaded() == false) {
+    if (!m_intelDriver || !m_intelDriver->IsLoaded()) {
         SetLastError("Intel driver not loaded");
         return false;
     }
@@ -158,7 +158,7 @@ bool KDMapper::UnmapDriver(ULONG64 moduleBase) {
 
     // Simulate free for demonstration
     bool result = m_intelDriver->FreePool(moduleBase);
-    if (result == false) {
+    if (!result) {
         SetLastError("Failed to free driver memory");
         return false;
     }
@@ -179,7 +179,7 @@ nt::NTSTATUS KDMapper::GetLastStatus() const {
 
 // Find a suitable location in kernel memory for the driver
 uint64_t KDMapper::FindKernelSpace(uint64_t size) {
-    if (m_intelDriver == nullptr || m_intelDriver->IsLoaded() == false || size == 0) {
+    if (!m_intelDriver || !m_intelDriver->IsLoaded() || size == 0) {
         return 0;
     }
 
@@ -194,19 +194,19 @@ uint64_t KDMapper::FindKernelSpace(uint64_t size) {
 
 // Load the driver sections into kernel memory
 bool KDMapper::MapDriverSections(PortableExecutable& pe, uint64_t imageBase, uint64_t targetBase) {
-    if (m_intelDriver == nullptr || m_intelDriver->IsLoaded() == false || pe.IsValid() == false) {
+    if (!m_intelDriver || !m_intelDriver->IsLoaded() || !pe.IsValid()) {
         return false;
     }
 
     // Get the NT headers
     IMAGE_NT_HEADERS* ntHeaders = pe.GetNtHeaders();
-    if (ntHeaders == nullptr) {
+    if (!ntHeaders) {
         return false;
     }
 
     // Map the headers
     ULONG headerSize = pe.GetHeaderSize();
-    if (m_intelDriver->WriteMemory(targetBase, reinterpret_cast<BYTE*>(imageBase), headerSize) == false) {
+    if (!m_intelDriver->WriteMemory(targetBase, reinterpret_cast<BYTE*>(imageBase), headerSize)) {
         SetLastError("Failed to write header to kernel memory");
         return false;
     }
@@ -230,7 +230,7 @@ bool KDMapper::MapDriverSections(PortableExecutable& pe, uint64_t imageBase, uin
         uint64_t destAddr = targetBase + section->VirtualAddress;
 
         // Write the section data
-        if (m_intelDriver->WriteMemory(destAddr, sourceAddr, section->SizeOfRawData) == false) {
+        if (!m_intelDriver->WriteMemory(destAddr, sourceAddr, section->SizeOfRawData)) {
             SetLastError("Failed to write section to kernel memory");
             return false;
         }
@@ -241,7 +241,7 @@ bool KDMapper::MapDriverSections(PortableExecutable& pe, uint64_t imageBase, uin
 
 // Fix imports for the driver
 bool KDMapper::ResolveImports(PortableExecutable& pe, uint64_t imageBase) {
-    if (m_intelDriver == nullptr || m_intelDriver->IsLoaded() == false || pe.IsValid() == false) {
+    if (!m_intelDriver || !m_intelDriver->IsLoaded() || !pe.IsValid()) {
         return false;
     }
 
@@ -267,7 +267,7 @@ bool KDMapper::ResolveImports(PortableExecutable& pe, uint64_t imageBase) {
 
 // Apply relocations for the driver
 bool KDMapper::ApplyRelocations(PortableExecutable& pe, uint64_t imageBase, uint64_t deltaImageBase) {
-    if (m_intelDriver == nullptr || m_intelDriver->IsLoaded() == false || pe.IsValid() == false) {
+    if (!m_intelDriver || !m_intelDriver->IsLoaded() || !pe.IsValid()) {
         return false;
     }
 
@@ -277,7 +277,7 @@ bool KDMapper::ApplyRelocations(PortableExecutable& pe, uint64_t imageBase, uint
 
 // Call the driver entry point
 bool KDMapper::CallEntryPoint(uint64_t driverBase, uint64_t driverSize) {
-    if (m_intelDriver == nullptr || m_intelDriver->IsLoaded() == false || driverBase == 0) {
+    if (!m_intelDriver || !m_intelDriver->IsLoaded() || driverBase == 0) {
         return false;
     }
 

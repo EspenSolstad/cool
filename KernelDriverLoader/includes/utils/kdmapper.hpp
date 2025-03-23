@@ -3,23 +3,12 @@
 #include <string>
 #include <vector>
 #include <filesystem>
-#include <memory>
 #include "../nt.hpp"
+#include "intel_driver.hpp"
+#include "portable_executable.hpp"
 #include "logging.hpp"
 #include "secure_memory.hpp"
 #include "../resources/resource.h"
-
-// Forward declarations
-class IntelDriver;
-class PortableExecutable;
-class KDMapper;
-
-// Global instance for easier access
-extern std::unique_ptr<KDMapper> g_kdMapper;
-
-// Include needed for implementation
-#include "intel_driver.hpp"
-#include "portable_executable.hpp"
 
 // Kernel Driver Mapper class
 class KDMapper {
@@ -76,3 +65,6 @@ private:
     // Set the last error details
     void SetLastError(const std::string& errorMessage, nt::NTSTATUS status = 0);
 };
+
+// Global instance for easier access
+extern std::unique_ptr<KDMapper> g_kdMapper;
