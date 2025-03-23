@@ -17,18 +17,30 @@ if %ERRORLEVEL% NEQ 0 (
 echo [*] Starting cheat components...
 echo.
 
-REM Step 1: Run the loader to map drivers
+REM Step 1: Run the GDRV mapper to load memdriver
 echo [*] Step 1: Loading and mapping drivers...
-echo [*] Running loader...
-cd "%~dp0\loader\loader\x64\Release"
-start /wait loader.exe
+echo [*] Running GDRV mapper...
+if exist "GDRVMapper.exe" (
+    GDRVMapper.exe
+) else (
+    echo [-] GDRVMapper.exe not found
+    echo [!] Please build GDRVMapper.sln first
+    pause
+    exit /b 1
+)
 
 REM Step 2: Launch the ESP
 echo.
 echo [*] Step 2: Starting ESP overlay...
 echo [*] Make sure Dead By Daylight is running...
-cd "%~dp0"
-start "" "%~dp0\DBD\x64\Release\DBD-ESP.exe"
+if exist "DBD\x64\Release\DBD-ESP.exe" (
+    start "" "DBD\x64\Release\DBD-ESP.exe"
+) else (
+    echo [-] DBD-ESP.exe not found
+    echo [!] Please build DBD\DBD-ESP.sln first
+    pause
+    exit /b 1
+)
 
 echo.
 echo [+] All components launched!
