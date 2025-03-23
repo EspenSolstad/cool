@@ -1,5 +1,6 @@
 #include "../../includes/utils/kdmapper.hpp"
 #include "../../includes/utils/logging.hpp"
+#include <fstream>
 
 // Global instance
 std::unique_ptr<KDMapper> g_kdMapper;

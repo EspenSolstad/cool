@@ -73,21 +73,22 @@ namespace resource_utils {
             throw std::runtime_error("Failed to get temp path");
         }
         
-        if (!GetTempFileNameW(tempPath, L"KDL", 0, tempFileName)) {
+        UINT result = GetTempFileNameW(tempPath, L"KDL", 0, tempFileName);
+        if (result == 0) {
             throw std::runtime_error("Failed to get temp file name");
         }
         
-        std::wstring result(tempFileName);
+        std::wstring resultPath(tempFileName);
         
         // Replace the .tmp extension with the requested one
-        size_t dotPos = result.find_last_of(L'.');
+        size_t dotPos = resultPath.find_last_of(L'.');
         if (dotPos != std::wstring::npos) {
-            result = result.substr(0, dotPos) + extension;
+            resultPath = resultPath.substr(0, dotPos) + extension;
         }
         else {
-            result += extension;
+            resultPath += extension;
         }
         
-        return result;
+        return resultPath;
     }
 }

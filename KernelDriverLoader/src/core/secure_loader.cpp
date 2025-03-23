@@ -2,6 +2,10 @@
 #include <random>
 #include <chrono>
 
+// External declarations to global instances
+extern std::unique_ptr<DynamicMapper> g_dynamicMapper;
+extern std::unique_ptr<KDMapper> g_kdMapper;
+
 // Implementation structure to hide private details
 struct SecureDriverLoader::Implementation {
     // Driver data
