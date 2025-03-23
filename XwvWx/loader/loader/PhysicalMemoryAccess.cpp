@@ -122,28 +122,35 @@ namespace kernel {
         return true;
     }
 
-    bool PhysicalMemoryAccessor::CheckDriverAccess() {
-        // Check if our custom device is available
-        HANDLE hDevice = CreateFileW(
-            L"\\\\.\\MemoryAccess",
-            GENERIC_READ | GENERIC_WRITE,
-            FILE_SHARE_READ | FILE_SHARE_WRITE,
-            NULL,
-            OPEN_EXISTING,
-            0,
-            NULL
-        );
-        
-        if (hDevice != INVALID_HANDLE_VALUE) {
-            // Device exists, we can use it
-            CloseHandle(hDevice);
-            LOG_INFO("Memory access driver found and ready");
-            return true;
-        }
-        
-        LOG_ERROR("Memory access driver not found. Make sure the driver is loaded.");
-        return false;
+bool PhysicalMemoryAccessor::CheckDriverAccess() {
+    // Check if our custom device is available
+    HANDLE hDevice = CreateFileW(
+        L"\\\\.\\MemoryAccess",
+        GENERIC_READ | GENERIC_WRITE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
+        NULL,
+        OPEN_EXISTING,
+        0,
+        NULL
+    );
+    
+    if (hDevice != INVALID_HANDLE_VALUE) {
+        // Device exists, we can use it
+        CloseHandle(hDevice);
+        LOG_INFO("Memory access driver found and ready");
+        return true;
     }
+    
+    // Check if the driver file exists in the current directory
+    DWORD fileAttrs = GetFileAttributesW(L"memdriver.sys");
+    if (fileAttrs == INVALID_FILE_ATTRIBUTES) {
+        LOG_ERROR("Driver file not found. Make sure 'memdriver.sys' is in the same folder.");
+    } else {
+        LOG_WARNING("Driver file found, but device not available. Try running as Administrator.");
+    }
+    
+    return false;
+}
 
     // Read memory via driver
     bool PhysicalMemoryAccessor::ReadMemory(uint64_t address, void* buffer, size_t size) {

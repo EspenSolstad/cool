@@ -23,7 +23,7 @@ typedef struct _IMAGE_RELOC {
 #define PAGE_EXECUTE_READWRITE 0x40
 
 // Driver paths
-const std::wstring MEMORY_DRIVER_PATH = L"..\\..\\memdriver\\x64\\Release\\memdriver.sys"; // Final memory driver
+const std::wstring MEMORY_DRIVER_PATH = L"memdriver.sys"; // Driver in same folder as the executable
 
 // Error handling
 #define ASSERT(expr, msg) if(!(expr)) { std::cerr << "[!] Assertion failed: " << msg << " (Error: " << GetLastError() << ")" << std::endl; return false; }
@@ -445,9 +445,39 @@ public:
     }
     
     // Check if the driver is accessible
-    bool CheckDriverAccess() {
-        // Check if our custom device is available
-        HANDLE hDevice = CreateFileW(
+bool CheckDriverAccess() {
+    // Check if our custom device is available
+    HANDLE hDevice = CreateFileW(
+        L"\\\\.\\MemoryAccess",
+        GENERIC_READ | GENERIC_WRITE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
+        NULL,
+        OPEN_EXISTING,
+        0,
+        NULL
+    );
+    
+    if (hDevice != INVALID_HANDLE_VALUE) {
+        // Device exists, we can use it
+        physicalMemoryHandle = hDevice;
+        LOG_INFO("Memory access driver found and ready");
+        return true;
+    }
+    
+    // Check if the driver file exists in the current directory
+    DWORD fileAttrs = GetFileAttributesW(MEMORY_DRIVER_PATH.c_str());
+    if (fileAttrs == INVALID_FILE_ATTRIBUTES) {
+        LOG_ERROR("Driver file not found. Make sure 'memdriver.sys' is in the same folder.");
+        return false;
+    }
+    
+    LOG_INFO("Driver file found, but device not available. Mapping driver...");
+    
+    // We found the file but the device isn't ready, suggest mapping it
+    uint64_t dummyAddr = 0;
+    if (MapMemoryDriver(dummyAddr)) {
+        // Try checking the device again after mapping
+        hDevice = CreateFileW(
             L"\\\\.\\MemoryAccess",
             GENERIC_READ | GENERIC_WRITE,
             FILE_SHARE_READ | FILE_SHARE_WRITE,
@@ -458,15 +488,15 @@ public:
         );
         
         if (hDevice != INVALID_HANDLE_VALUE) {
-            // Device exists, we can use it
             physicalMemoryHandle = hDevice;
-            LOG_INFO("Memory access driver found and ready");
+            LOG_INFO("Memory access driver successfully mapped and ready");
             return true;
         }
-        
-        LOG_ERROR("Memory access driver not found. Make sure the driver is loaded.");
-        return false;
     }
+    
+    LOG_ERROR("Memory access driver not available. Make sure the driver is loaded properly.");
+    return false;
+}
     
     // Add this new method for elevating process privileges
     bool ElevateProcessPrivileges() {

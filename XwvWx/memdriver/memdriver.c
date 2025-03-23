@@ -1,6 +1,5 @@
 #include <ntifs.h>
 #include <ntddk.h>
-#include <wdf.h>
 
 // Device name and symbolic link
 #define DEVICE_NAME L"\\Device\\MemoryAccess"
