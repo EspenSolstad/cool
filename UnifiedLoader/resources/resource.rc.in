@@ -1,0 +1,37 @@
+#include <windows.h>
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION     1,0,0,0
+PRODUCTVERSION  1,0,0,0
+FILEFLAGSMASK   VS_FFI_FILEFLAGSMASK
+FILEFLAGS       0
+FILEOS          VOS__WINDOWS32
+FILETYPE        VFT_APP
+FILESUBTYPE     VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904E4"
+        BEGIN
+            VALUE "CompanyName",      "System Utilities"
+            VALUE "FileDescription",  "System Management Utility"
+            VALUE "FileVersion",      "1.0.0.0"
+            VALUE "InternalName",     "sysutil.exe"
+            VALUE "LegalCopyright",   "Copyright (C) 2025"
+            VALUE "OriginalFilename", "sysutil.exe"
+            VALUE "ProductName",      "System Management Utility"
+            VALUE "ProductVersion",   "1.0.0.0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1252
+    END
+END
+
+// Icon with lowest ID value placed first to ensure application icon
+// remains consistent on all systems.
+1 ICON "app.ico"
+
+// Manifest to ensure proper Windows version targeting
+1 24 "app.manifest"
