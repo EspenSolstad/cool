@@ -4,15 +4,23 @@
 class RecoilCompensation {
     ; Initialize recoil compensation system
     __New() {
+        ; Initialize arrays and objects
         this.recoilSamples := []
-        this.lastCrosshairPos := {x: 0, y: 0}
+        this.lastCrosshairPos := {x: 0.0, y: 0.0}
+        
+        ; Initialize control flags
         this.isCompensating := false
+        
+        ; Initialize counters and timers
         this.sampleCount := 0
         this.lastSampleTime := 0
         
         ; Initialize moving averages for smoothing
-        this.movingAvgX := 0
-        this.movingAvgY := 0
+        this.movingAvgX := 0.0
+        this.movingAvgY := 0.0
+        
+        ; Initialize temporary storage
+        this.tempVector := {x: 0.0, y: 0.0, magnitude: 0.0}
     }
     
     ; Start recoil compensation
@@ -68,22 +76,30 @@ class RecoilCompensation {
             })
         }
         
-        ; Calculate compensation values using exponential smoothing
+        ; Initialize compensation variables
         compensationX := 0.0
         compensationY := 0.0
-        
-        ; Weight recent samples more heavily
-        sampleWeight := 1.0
         totalWeight := 0.0
+        sampleWeight := 1.0
+        tempX := 0.0
+        tempY := 0.0
         
+        ; Process each recoil sample
         for i, sample in this.recoilSamples {
-            compensationX := compensationX + (sample.x * sampleWeight)
-            compensationY := compensationY + (sample.y * sampleWeight)
+            ; Calculate weighted contribution
+            tempX := sample.x * sampleWeight
+            tempY := sample.y * sampleWeight
+            
+            ; Accumulate weighted values
+            compensationX := compensationX + tempX
+            compensationY := compensationY + tempY
             totalWeight := totalWeight + sampleWeight
-            sampleWeight := sampleWeight * 0.9  ; Decay weight for older samples
+            
+            ; Decay weight for next sample
+            sampleWeight := sampleWeight * 0.9
         }
         
-        ; Calculate weighted average
+        ; Calculate weighted average if we have samples
         if (totalWeight > 0) {
             compensationX := compensationX / totalWeight
             compensationY := compensationY / totalWeight

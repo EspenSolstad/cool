@@ -37,9 +37,13 @@ GetMousePos() {
 
 ; Calculate distance between two points
 CalculateDistance(x1, y1, x2, y2) {
+    deltaX := 0.0
+    deltaY := 0.0
     deltaX := x2 - x1
     deltaY := y2 - y1
-    return Sqrt(deltaX * deltaX + deltaY * deltaY)
+    distance := 0.0
+    distance := Sqrt(deltaX * deltaX + deltaY * deltaY)
+    return distance
 }
 
 ; Smooth mouse movement with dynamic compensation
@@ -48,10 +52,14 @@ SmoothMove(targetX, targetY, speed := 1.0) {
     
     mousePos := GetMousePos()
     
+    deltaX := 0.0
+    deltaY := 0.0
     deltaX := (targetX - mousePos.x) / smoothingSteps
     deltaY := (targetY - mousePos.y) / smoothingSteps
     
     Loop % smoothingSteps {
+        moveX := 0
+        moveY := 0
         moveX := Round(deltaX * speed)
         moveY := Round(deltaY * speed)
         
@@ -94,12 +102,18 @@ GetScreenRegion(x, y, width, height) {
 
 ; Calculate movement vector between two points
 CalculateMovementVector(x1, y1, x2, y2) {
+    deltaX := 0.0
+    deltaY := 0.0
+    magnitude := 0.0
+    
     deltaX := x2 - x1
     deltaY := y2 - y1
+    magnitude := Sqrt(deltaX * deltaX + deltaY * deltaY)
+    
     return {
         x: deltaX,
         y: deltaY,
-        magnitude: Sqrt(deltaX * deltaX + deltaY * deltaY)
+        magnitude: magnitude
     }
 }
 
