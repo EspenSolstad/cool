@@ -13,8 +13,16 @@ if %errorLevel% neq 0 (
     exit /b 1
 )
 
+REM Set working directory to script location
+cd /d "%~dp0"
+
 REM Activate virtual environment
-call venv\Scripts\activate.bat
+call venv\Scripts\activate.bat || (
+    echo [-] Virtual environment not found
+    echo [!] Please run install.bat first
+    pause
+    exit /b 1
+)
 
 echo [*] Building ESP executable...
 echo.
