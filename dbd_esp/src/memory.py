@@ -195,6 +195,13 @@ class MemoryReader:
         except:
             return (0.0, 0.0, 0.0)
             
+    def read_short(self, address: int) -> int:
+        """Read 16-bit integer"""
+        try:
+            return int.from_bytes(self.read_bytes(address, 2), byteorder='little')
+        except:
+            return 0
+            
     def read_string(self, address: int, size: int = 32) -> str:
         """Read string with maximum size"""
         try:
@@ -204,20 +211,90 @@ class MemoryReader:
         except:
             return ""
             
-    def get_game_instance(self) -> int:
-        """Get UGameInstance pointer from UWorld"""
+    def get_object_by_name(self, name: str) -> int:
+        """Find object in GObjects array by name"""
         if not self.base_address:
             return 0
             
         try:
-            # Get UWorld pointer from GWorld
-            world_ptr = self.read_long(self.base_address + Engine.GWorld)
-            if not world_ptr:
-                print("[-] Failed to read GWorld")
+            # Get GObjects array
+            gobjects = self.base_address + Engine.GObjects
+            num_elements = self.read_int(gobjects + Engine.FChunkedFixedUObjectArray.NumElements)
+            chunks = self.read_long(gobjects + Engine.FChunkedFixedUObjectArray.Chunks)
+            
+            if not chunks or num_elements <= 0:
+                print("[-] Failed to read GObjects array")
                 return 0
                 
-            print(f"[+] Found UWorld at: 0x{world_ptr:X}")
+            print(f"[*] Searching through {num_elements} objects...")
             
+            # Iterate through chunks
+            chunk_size = Engine.FChunkedFixedUObjectArray.ChunkSize
+            for i in range(0, num_elements, chunk_size):
+                chunk_index = i // chunk_size
+                chunk = self.read_long(chunks + chunk_index * 8)
+                if not chunk:
+                    continue
+                    
+                # Read objects in this chunk
+                for j in range(min(chunk_size, num_elements - i)):
+                    obj_ptr = self.read_long(chunk + j * 8)
+                    if not obj_ptr:
+                        continue
+                        
+                    # Get object name
+                    name_index = self.read_int(obj_ptr + 0x18)  # FName.Index offset
+                    obj_name = self.get_name(name_index)
+                    
+                    if obj_name == name:
+                        print(f"[+] Found {name} at: 0x{obj_ptr:X}")
+                        return obj_ptr
+                        
+            print(f"[-] Object {name} not found")
+            return 0
+            
+        except Exception as e:
+            print(f"[-] Failed to search objects: {e}")
+            return 0
+            
+    def get_name(self, name_index: int) -> str:
+        """Get string from FName pool"""
+        try:
+            if name_index == 0:
+                return ""
+                
+            # Get name from pool
+            name_pool = self.base_address + Engine.GNames
+            block_id = name_index >> Engine.NameBlockOffsetBits
+            block = self.read_long(name_pool + Engine.FNamePool.Blocks + block_id * 8)
+            
+            if not block:
+                return ""
+                
+            entry = block + (name_index & ((1 << Engine.NameBlockOffsetBits) - 1)) * 2
+            length = self.read_short(entry)
+            
+            if length <= 0:
+                return ""
+                
+            name_data = self.read_bytes(entry + 2, length)
+            return name_data.decode('utf-8')
+            
+        except:
+            return ""
+            
+    def get_game_instance(self) -> int:
+        """Get UGameInstance by finding UWorld in GObjects"""
+        if not self.base_address:
+            return 0
+            
+        try:
+            # Find UWorld instance
+            world_ptr = self.get_object_by_name("UWorld")
+            if not world_ptr:
+                print("[-] Failed to find UWorld instance")
+                return 0
+                
             # Get GameInstance from UWorld
             game_instance = self.read_long(world_ptr + Engine.UWorld.OwningGameInstance)
             if not game_instance:
