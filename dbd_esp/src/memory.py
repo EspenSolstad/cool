@@ -1,12 +1,74 @@
 import time
 import random
+import ctypes
+import ctypes.wintypes as wintypes
 from typing import Optional, Tuple, List, Dict, Set
 import psutil
-from pymem import Pymem
-from pymem.process import module_from_name
 import numpy as np
 from .process_utils import ProcessMonitor
 from .offsets import Engine
+
+# Windows constants
+PROCESS_ALL_ACCESS = 0x1F0FFF
+SE_DEBUG_PRIVILEGE = 20
+TOKEN_ADJUST_PRIVILEGES = 0x20
+TOKEN_QUERY = 0x8
+
+class LUID(ctypes.Structure):
+    _fields_ = [
+        ("LowPart", wintypes.DWORD),
+        ("HighPart", wintypes.LONG)
+    ]
+
+class LUID_AND_ATTRIBUTES(ctypes.Structure):
+    _fields_ = [
+        ("Luid", LUID),
+        ("Attributes", wintypes.DWORD)
+    ]
+
+class TOKEN_PRIVILEGES(ctypes.Structure):
+    _fields_ = [
+        ("PrivilegeCount", wintypes.DWORD),
+        ("Privileges", LUID_AND_ATTRIBUTES * 1)
+    ]
+
+def enable_debug_privilege():
+    """Enable debug privilege for current process"""
+    try:
+        h_token = ctypes.c_void_p()
+        if not ctypes.windll.advapi32.OpenProcessToken(
+            ctypes.windll.kernel32.GetCurrentProcess(),
+            TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY,
+            ctypes.byref(h_token)
+        ):
+            return False
+            
+        luid = LUID()
+        if not ctypes.windll.advapi32.LookupPrivilegeValueW(
+            None,
+            "SeDebugPrivilege",
+            ctypes.byref(luid)
+        ):
+            return False
+            
+        tp = TOKEN_PRIVILEGES()
+        tp.PrivilegeCount = 1
+        tp.Privileges[0].Luid = luid
+        tp.Privileges[0].Attributes = 2  # SE_PRIVILEGE_ENABLED
+        
+        if not ctypes.windll.advapi32.AdjustTokenPrivileges(
+            h_token,
+            False,
+            ctypes.byref(tp),
+            ctypes.sizeof(tp),
+            None,
+            None
+        ):
+            return False
+            
+        return True
+    except:
+        return False
 
 class MemoryCache:
     def __init__(self, max_size: int = 1024):
