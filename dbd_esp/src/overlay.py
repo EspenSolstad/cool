@@ -15,6 +15,31 @@ class Overlay:
         if not self.game_hwnd:
             raise Exception("Game window not found")
             
+        # Configurable settings
+        self.box_thickness = 2
+        self.text_size = 14
+        self.show_items = True
+        self.show_health = True
+        self.show_distance = True
+        self.killer_color = 'RED'
+        self.survivor_color = 'GREEN'
+        self.injured_color = 'YELLOW'
+        self.dying_color = 'GRAY'
+        self.carried_color = 'ORANGE'
+        
+        # Color mapping
+        self.color_map = {
+            'RED': (255, 0, 0),
+            'GREEN': (0, 255, 0),
+            'BLUE': (0, 0, 255),
+            'YELLOW': (255, 255, 0),
+            'PURPLE': (255, 0, 255),
+            'CYAN': (0, 255, 255),
+            'WHITE': (255, 255, 255),
+            'GRAY': (128, 128, 128),
+            'ORANGE': (255, 165, 0)
+        }
+            
         # Get window dimensions
         self.window_rect = win32gui.GetWindowRect(self.game_hwnd)
         self.width = self.window_rect[2] - self.window_rect[0]
@@ -111,21 +136,40 @@ class Overlay:
             if not screen_pos:
                 continue
                 
+            # Determine entity color
+            if entity.is_killer:
+                color = self.color_map[self.killer_color]
+            else:
+                if entity.being_carried:
+                    color = self.color_map[self.carried_color]
+                elif entity.health <= 0:
+                    color = self.color_map[self.dying_color]
+                elif entity.health <= 50:
+                    color = self.color_map[self.injured_color]
+                else:
+                    color = self.color_map[self.survivor_color]
+
             # Draw box around entity
-            self.draw_box(screen_pos, 40, 80, entity.color)
+            self.draw_box(screen_pos, 40, 80, color, self.box_thickness)
             
-            # Draw health bar if not killer
-            if not entity.is_killer:
+            # Update font if text size changed
+            if self.font.get_height() != self.text_size:
+                self.font = pygame.font.SysFont('Arial', self.text_size)
+                self.font_height = self.font.get_height()
+            
+            # Draw health bar if not killer and health display enabled
+            if not entity.is_killer and self.show_health:
                 health_pos = (screen_pos[0], screen_pos[1] + 50)
                 self.draw_health_bar(health_pos, entity.health)
             
             # Draw name and info
             name_pos = (screen_pos[0], screen_pos[1] - 50)
-            self.draw_text(name_pos, entity.name, entity.color)
+            self.draw_text(name_pos, entity.name, color)
             
-            if entity.item_name != "None":
+            # Show items if enabled
+            if self.show_items and entity.item_name != "None":
                 item_pos = (screen_pos[0], screen_pos[1] - 35)
-                self.draw_text(item_pos, f"Item: {entity.item_name}", (255, 255, 255))
+                self.draw_text(item_pos, f"Item: {entity.item_name}", self.color_map['WHITE'])
                 
         # Update display
         pygame.display.flip()

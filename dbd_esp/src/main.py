@@ -30,6 +30,7 @@ from .memory import MemoryReader
 from .entity import EntityManager
 from .overlay import Overlay
 from .process_utils import ProcessHider, ProcessMonitor
+from .status import StatusDisplay
 
 def log_exception(e: Exception):
     """Log an exception with full traceback"""
@@ -43,6 +44,7 @@ class ESPHack:
         self.overlay: Optional[Overlay] = None
         self.process_hider: Optional[ProcessHider] = None
         self.process_monitor: Optional[ProcessMonitor] = None
+        self.status_display: Optional[StatusDisplay] = None
         self.running = False
         
         # Performance tuning
@@ -83,9 +85,18 @@ class ESPHack:
             print("[*] Initializing entity manager...")
             self.entity_manager = EntityManager(self.memory)
             
+            # Initialize status display
+            print("[*] Initializing status display...")
+            self.status_display = StatusDisplay()
+            self.status_display.start()
+            
             # Create overlay last
             print("[*] Creating overlay...")
             self.overlay = Overlay()
+            
+            # Update initial status
+            if self.status_display:
+                self.status_display.update_entities(self.entity_manager.entities)
             
             return True
             
@@ -113,9 +124,19 @@ class ESPHack:
                     # We're running well, try to decrease batch size
                     self.batch_update_size = max(4, self.batch_update_size - 1)
                 
+                # Check if ESP is enabled
+                if self.status_display and not self.status_display.settings['esp_enabled']:
+                    time.sleep(0.1)
+                    continue
+
                 # Update entities in batches
                 self.memory.process_batch_reads()  # Process any queued reads
                 self.entity_manager.update()
+                
+                # Update status display
+                if self.status_display:
+                    self.status_display.update_entities(self.entity_manager.entities)
+                    self.status_display.settings['refresh_rate'] = int(1.0 / frame_time)
                 
                 last_update = time.time()
                 update_count += 1
@@ -123,6 +144,10 @@ class ESPHack:
                 # Clear memory cache periodically
                 if update_count % 100 == 0:
                     self.memory.cache.clear()
+
+                # Adjust delay based on performance mode
+                if self.status_display and self.status_display.settings['performance_mode']:
+                    time.sleep(0.1)  # 10 FPS in performance mode
                 
             except Exception as e:
                 print(f"[-] Update error: {e}")
@@ -136,6 +161,24 @@ class ESPHack:
                     self.running = False
                     break
                     
+                # Check if ESP is enabled
+                if self.status_display and not self.status_display.settings['esp_enabled']:
+                    time.sleep(0.1)
+                    continue
+
+                # Apply status display settings to overlay
+                if self.status_display:
+                    self.overlay.box_thickness = self.status_display.settings['box_thickness']
+                    self.overlay.text_size = self.status_display.settings['text_size']
+                    self.overlay.show_items = self.status_display.settings['show_items']
+                    self.overlay.show_health = self.status_display.settings['show_health']
+                    self.overlay.show_distance = self.status_display.settings['show_distance']
+                    self.overlay.killer_color = self.status_display.settings['killer_color']
+                    self.overlay.survivor_color = self.status_display.settings['survivor_color']
+                    self.overlay.injured_color = self.status_display.settings['injured_color']
+                    self.overlay.dying_color = self.status_display.settings['dying_color']
+                    self.overlay.carried_color = self.status_display.settings['carried_color']
+
                 # Render entities
                 self.overlay.render(self.entity_manager.entities)
                 
@@ -155,6 +198,18 @@ class ESPHack:
         print(f"    - Max update delay: {self.max_update_delay*1000:.1f}ms")
         print("\n[*] Controls:")
         print("    - ESC: Exit")
+        print("    - F1: Toggle ESP On/Off")
+        print("    - F2: Toggle Items Display")
+        print("    - F3: Toggle Health Display")
+        print("    - F4: Toggle Distance Display")
+        print("    - F5: Toggle Performance Mode")
+        print("    - F6: Cycle Killer Color")
+        print("    - F7/F8: Adjust Box Thickness")
+        print("    - F9/F10: Adjust Text Size")
+        print("\n[*] Status Display:")
+        print("    - Check dbd_status.txt for real-time info")
+        print("    - Shows active players and settings")
+        print("    - Updates automatically")
         print("\n[!] Remember:")
         print("    - Keep this window minimized")
         print("    - The overlay will appear over the game")
@@ -190,6 +245,8 @@ class ESPHack:
             
         finally:
             # Cleanup
+            if self.status_display:
+                self.status_display.stop()
             if self.overlay:
                 self.overlay.cleanup()
             if self.process_hider:
