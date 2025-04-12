@@ -163,4 +163,12 @@ echo [!] Always run as administrator!
 echo [!] Use debug version if you encounter problems
 echo.
 
+REM Clean up temporary files
+echo [*] Cleaning up...
+if exist "%TEMP_DIR%" rmdir /s /q "%TEMP_DIR%" >nul 2>&1
+if exist "*.spec" del /f /q *.spec >nul 2>&1
+if exist "%TEMP_DIR%\*.spec" del /f /q "%TEMP_DIR%\*.spec" >nul 2>&1
+
+echo [+] Cleanup complete
+echo.
 pause

@@ -30,6 +30,7 @@ class ProcessHider:
         try:
             # Get current process handle
             current_process = win32api.GetCurrentProcess()
+            current_handle = current_process.handle if hasattr(current_process, 'handle') else current_process
             
             # Save original name
             if not self.original_name:
@@ -42,7 +43,7 @@ class ProcessHider:
             process_basic_info = ctypes.c_void_p()
             process_basic_info_size = ctypes.sizeof(process_basic_info)
             status = ctypes.windll.ntdll.NtQueryInformationProcess(
-                current_process.handle,
+                current_handle,
                 0,  # ProcessBasicInformation
                 ctypes.byref(process_basic_info),
                 process_basic_info_size,
@@ -50,15 +51,19 @@ class ProcessHider:
             )
             
             if status != 0:
+                print(f"Failed to query basic process information: {status}")
                 return False
                 
             # Get PEB address
             peb = ctypes.c_void_p.from_buffer(process_basic_info).value
+            if not peb:
+                print("Failed to get PEB address")
+                return False
             
             # Modify process parameters
             params = ctypes.c_void_p()
             status = ctypes.windll.ntdll.NtQueryInformationProcess(
-                current_process.handle,
+                current_handle,
                 0x1F,  # ProcessImageFileName
                 ctypes.byref(params),
                 ctypes.sizeof(params),
@@ -66,17 +71,26 @@ class ProcessHider:
             )
             
             if status != 0:
+                print(f"Failed to query process parameters: {status}")
+                return False
+                
+            if not params.value:
+                print("Failed to get process parameters")
                 return False
                 
             # Write fake name
             fake_name_buffer = ctypes.create_unicode_buffer(fake_name)
-            ctypes.windll.kernel32.WriteProcessMemory(
-                current_process.handle,
+            result = ctypes.windll.kernel32.WriteProcessMemory(
+                current_handle,
                 params.value,
                 fake_name_buffer,
                 len(fake_name) * 2,
                 None
             )
+            
+            if not result:
+                print(f"Failed to write process memory: {ctypes.get_last_error()}")
+                return False
             
             self.hidden = True
             return True
@@ -91,13 +105,15 @@ class ProcessHider:
             return False
             
         try:
+            # Get current process handle
             current_process = win32api.GetCurrentProcess()
+            current_handle = current_process.handle if hasattr(current_process, 'handle') else current_process
             
             # Restore original name
             original_buffer = ctypes.create_unicode_buffer(self.original_name)
             params = ctypes.c_void_p()
             status = ctypes.windll.ntdll.NtQueryInformationProcess(
-                current_process.handle,
+                current_handle,
                 0x1F,
                 ctypes.byref(params),
                 ctypes.sizeof(params),
@@ -105,15 +121,24 @@ class ProcessHider:
             )
             
             if status != 0:
+                print(f"Failed to query process information: {status}")
                 return False
                 
-            ctypes.windll.kernel32.WriteProcessMemory(
-                current_process.handle,
+            if not params.value:
+                print("Failed to get process parameters")
+                return False
+                
+            result = ctypes.windll.kernel32.WriteProcessMemory(
+                current_handle,
                 params.value,
                 original_buffer,
                 len(self.original_name) * 2,
                 None
             )
+            
+            if not result:
+                print(f"Failed to write process memory: {ctypes.get_last_error()}")
+                return False
             
             self.hidden = False
             return True
