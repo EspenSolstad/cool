@@ -160,27 +160,53 @@ class ProcessMonitor:
     def wait_for_steam(self) -> bool:
         """Wait for Steam to fully initialize"""
         try:
+            print("[*] Looking for Steam process...")
+            dots = 0
             while True:
                 for proc in psutil.process_iter(['name']):
                     if proc.info['name'] == self.steam_process:
+                        print("[+] Found Steam!")
+                        print("[*] Waiting for Steam to initialize...")
                         # Wait a bit more for Steam to fully initialize
                         time.sleep(random.uniform(2.0, 4.0))
                         return True
+                        
+                # Show waiting animation
+                print(f"\r[*] Waiting for Steam{'.' * dots + ' ' * (3-dots)}", end='')
+                dots = (dots + 1) % 4
                 time.sleep(0.5)
-        except:
+                
+        except KeyboardInterrupt:
+            print("\n[*] Search cancelled by user")
+            return False
+        except Exception as e:
+            print(f"\n[-] Error searching for Steam: {e}")
             return False
             
     def wait_for_game(self) -> Optional[int]:
         """Wait for game process to start and return its PID"""
         try:
+            print("[*] Looking for Dead by Daylight process...")
+            dots = 0
             while True:
                 for proc in psutil.process_iter(['name', 'pid']):
                     if proc.info['name'] == self.target_process:
+                        print("[+] Found game process!")
+                        print("[*] Waiting for game to initialize...")
                         # Small delay to let process initialize
-                        time.sleep(random.uniform(0.1, 0.3))
+                        time.sleep(random.uniform(1.0, 2.0))
                         return proc.info['pid']
-                time.sleep(0.1)
-        except:
+                        
+                # Show waiting animation
+                print(f"\r[*] Waiting for game{'.' * dots + ' ' * (3-dots)}", end='')
+                dots = (dots + 1) % 4
+                time.sleep(0.5)
+                
+        except KeyboardInterrupt:
+            print("\n[*] Search cancelled by user")
+            return None
+        except Exception as e:
+            print(f"\n[-] Error searching for game: {e}")
             return None
             
     def monitor_process_start(self):

@@ -75,11 +75,35 @@ class ESPHack:
             
             # Wait for game and attach
             print("[*] Waiting for game process...")
-            if not self.memory.attach():
-                print("[-] Failed to attach to game process")
+            print("[*] Make sure Dead by Daylight is running")
+            print("[*] Game must be in windowed or borderless mode")
+            print("[*] Press CTRL+C to exit...")
+            
+            try:
+                if not self.memory.attach():
+                    print("\n[-] Failed to attach to game process")
+                    print("[!] Common issues:")
+                    print("    1. Game is not running")
+                    print("    2. Game is running but not fully loaded")
+                    print("    3. Game is in fullscreen mode")
+                    print("    4. ESP needs administrator privileges")
+                    print("\n[*] Press any key to exit...")
+                    input()
+                    return False
+                    
+                print("[+] Successfully attached to game process")
+            except KeyboardInterrupt:
+                print("\n[*] ESP stopped by user")
                 return False
-                
-            print("[+] Successfully attached to game process")
+            except Exception as e:
+                print(f"\n[-] Error attaching to game: {e}")
+                print("[!] This could be due to:")
+                print("    1. Anti-cheat blocking access")
+                print("    2. Game version mismatch")
+                print("    3. Insufficient permissions")
+                print("\n[*] Press any key to exit...")
+                input()
+                return False
             
             # Initialize entity manager with batching
             print("[*] Initializing entity manager...")
@@ -260,24 +284,37 @@ def is_admin():
         return False
 
 def main():
-    # Check for admin rights
-    if not is_admin():
-        print("[-] This script requires administrator privileges")
-        print("[!] Please run as administrator")
-        return
-        
-    # Create mutex to prevent multiple instances
-    mutex = win32event.CreateMutex(None, 1, "DBD_ESP_MUTEX")
-    if win32api.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
-        print("[-] Another instance is already running")
-        return
-        
     try:
-        # Start ESP
-        esp = ESPHack()
-        esp.run()
-    finally:
-        win32event.ReleaseMutex(mutex)
+        # Check for admin rights
+        if not is_admin():
+            print("[-] This script requires administrator privileges")
+            print("[!] Please run as administrator")
+            print("\n[*] Press any key to exit...")
+            input()
+            return
+            
+        # Create mutex to prevent multiple instances
+        mutex = win32event.CreateMutex(None, 1, "DBD_ESP_MUTEX")
+        if win32api.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
+            print("[-] Another instance is already running")
+            print("[!] Close the other ESP instance first")
+            print("\n[*] Press any key to exit...")
+            input()
+            return
+            
+        try:
+            # Start ESP
+            esp = ESPHack()
+            esp.run()
+        finally:
+            win32event.ReleaseMutex(mutex)
+            
+    except Exception as e:
+        print(f"\n[-] Fatal error: {e}")
+        print("[!] Please report this error")
+        print("[*] Check error.log for details")
+        print("\n[*] Press any key to exit...")
+        input()
 
 if __name__ == "__main__":
     # Add random startup delay

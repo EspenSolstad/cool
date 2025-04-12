@@ -59,24 +59,45 @@ class MemoryReader:
         try:
             # Wait for Steam first
             if not self.process_monitor.wait_for_steam():
+                print("[-] Steam not detected")
+                print("[!] Make sure Steam is running")
                 return False
                 
             # Wait for game process
             pid = self.process_monitor.wait_for_game()
             if not pid:
+                print("[-] Game process not found")
+                print("[!] Make sure Dead by Daylight is running")
+                print("[!] Game must be fully loaded")
                 return False
                 
             # Attach to process
-            self.pm = Pymem(pid)
-            module = module_from_name(self.pm.process_handle, self.process_name)
-            if module:
-                self.base_address = module.lpBaseOfDll
-                return True
+            try:
+                self.pm = Pymem(pid)
+            except Exception as e:
+                print("[-] Failed to attach to game process")
+                print("[!] This could be due to:")
+                print("    1. Game is in fullscreen mode")
+                print("    2. Anti-cheat is blocking access")
+                print("    3. ESP needs administrator privileges")
+                print(f"[*] Error details: {e}")
+                return False
                 
-            return False
+            # Get game module
+            module = module_from_name(self.pm.process_handle, self.process_name)
+            if not module:
+                print("[-] Failed to find game module")
+                print("[!] The game may have updated")
+                print("[!] ESP may need to be updated")
+                return False
+                
+            self.base_address = module.lpBaseOfDll
+            return True
             
         except Exception as e:
-            print(f"Failed to attach: {e}")
+            print("[-] Unexpected error during attachment:")
+            print(f"[!] {str(e)}")
+            print("[*] Please report this error")
             return False
             
     def queue_read(self, address: int, size: int):
