@@ -1,7 +1,7 @@
 # Game engine offsets ported from C++ version
 class Engine:
-    GObjects = 0xa731510
-    GNames = 0xA66ECC0
+    GObjects = 0xa80a590
+    GNames = 0xa747d40
     GWorld = 0xA8C7160
     PEOffset = 0x3B56050
 
@@ -69,8 +69,20 @@ class Offsets:
 class Patterns:
     # Core engine patterns
     UWORLD = (
+        # Common GWorld access patterns
+        b"\x48\x8B\x1D\x00\x00\x00\x00\x48\x85\xDB\x74\x00\x41\xB0\x01",
+        "xxx????xxxx?xxx"
+    )
+    
+    # Alternative GWorld patterns
+    UWORLD_ALT1 = (
         b"\x48\x8B\x05\x00\x00\x00\x00\x48\x8B\x88\x00\x00\x00\x00\x48\x85\xC9\x74\x06\x48\x8B\x49\x70",
         "xxx????xxx????xxxxxxxxxx"
+    )
+    
+    UWORLD_ALT2 = (
+        b"\x48\x8B\x05\x00\x00\x00\x00\x48\x85\xC0\x74\x00\x44\x8B\x48\x08",
+        "xxx????xxxx?xxxx"
     )
     
     # Game state patterns

@@ -6,6 +6,7 @@ from pymem import Pymem
 from pymem.process import module_from_name
 import numpy as np
 from .process_utils import ProcessMonitor
+from .offsets import Patterns, Engine
 
 class MemoryCache:
     def __init__(self, max_size: int = 1024):
@@ -86,7 +87,29 @@ class MemoryReader:
             # Get game module
             module = module_from_name(self.pm.process_handle, self.process_name)
             if not module:
-                print("[-] Failed to find game module")
+                print("[-] Failed to find game module directly")
+                print("[*] Attempting pattern scan fallback...")
+                # Try to find GWorld through pattern scanning
+                print("[*] Attempting pattern scan with multiple signatures...")
+                
+                # Try each GWorld pattern
+                patterns = [
+                    ("Primary", Patterns.UWORLD),
+                    ("Alt 1", Patterns.UWORLD_ALT1),
+                    ("Alt 2", Patterns.UWORLD_ALT2)
+                ]
+                
+                for pattern_name, pattern in patterns:
+                    print(f"[*] Trying {pattern_name} pattern...")
+                    base_addr = self.find_pattern(*pattern)
+                    if base_addr:
+                        print(f"\n[+] Found GWorld using {pattern_name} pattern!")
+                        # Get module base from pattern address
+                        self.base_address = base_addr & 0xFFFFFFFFFFF00000
+                        print(f"[*] Base address: 0x{self.base_address:X}")
+                        return True
+                
+                print("\n[-] All pattern scans failed")
                 print("[!] The game may have updated")
                 print("[!] ESP may need to be updated")
                 return False
@@ -203,22 +226,33 @@ class MemoryReader:
             
     def find_pattern(self, pattern: bytes, mask: str) -> int:
         """Find pattern with optimized scanning"""
-        if not self.pm or not self.base_address:
+        if not self.pm:
             return 0
             
         try:
             chunk_size = 0x10000  # Larger chunks for faster scanning
-            current_addr = self.base_address
+            current_addr = 0x10000  # Start after null page
             
             # Suspend threads during pattern scan
             pid = self.pm.process_id
             suspended_threads = ProcessMonitor.suspend_threads(pid)
             
             try:
-                while current_addr < self.base_address + 0x10000000:
-                    chunk = self.read_bytes_direct(current_addr, chunk_size)
-                    if not chunk:
-                        break
+                max_addr = 0x7FFFFFFF  # Scan up to 2GB of memory
+                last_progress = 0
+                
+                while current_addr < max_addr:
+                    # Show progress every 100MB
+                    progress = (current_addr * 100) // max_addr
+                    if progress > last_progress:
+                        print(f"\r[*] Scanning memory: {progress}%", end='')
+                        last_progress = progress
+                        
+                    try:
+                        chunk = self.read_bytes_direct(current_addr, chunk_size)
+                        if not chunk:
+                            current_addr += chunk_size
+                            continue
                         
                     for i in range(len(chunk)):
                         matched = True
