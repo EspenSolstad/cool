@@ -1,7 +1,9 @@
 # Game engine offsets and structure layouts
 class Engine:
+    # Global engine pointers
     GObjects = 0xa80a590
     GNames = 0xa747d40
+    GWorld = 0xa8c7160  # Global UWorld pointer
     
     # Core structure offsets
     class UWorld:
@@ -85,41 +87,3 @@ class Offsets:
     GameRole = 0x3fa           # GameRole
     PlayerGameState = 0x4d0    # OnPlayerGameStateChanged
     PlayerCustomization = 0x600 # _playerCustomization
-
-# Memory scanning patterns
-class Patterns:
-    # Core engine patterns
-    UWORLD = (
-        # Common GWorld access patterns
-        b"\x48\x8B\x1D\x00\x00\x00\x00\x48\x85\xDB\x74\x00\x41\xB0\x01",
-        "xxx????xxxx?xxx"
-    )
-    
-    # Alternative GWorld patterns
-    UWORLD_ALT1 = (
-        b"\x48\x8B\x05\x00\x00\x00\x00\x48\x8B\x88\x00\x00\x00\x00\x48\x85\xC9\x74\x06\x48\x8B\x49\x70",
-        "xxx????xxx????xxxxxxxxxx"
-    )
-    
-    UWORLD_ALT2 = (
-        b"\x48\x8B\x05\x00\x00\x00\x00\x48\x85\xC0\x74\x00\x44\x8B\x48\x08",
-        "xxx????xxxx?xxxx"
-    )
-    
-    # Game state patterns
-    GAMESTATE = (
-        b"\x48\x89\x5C\x24\x00\x48\x89\x74\x24\x00\x57\x48\x83\xEC\x20\x48\x8B\xD9\x41\x8B\xF0",
-        "xxxx?xxxx?xxxxxxxxxxx"
-    )
-    
-    # Player patterns
-    PLAYER_ARRAY = (
-        b"\x48\x8B\x0D\x00\x00\x00\x00\x48\x8B\x01\x48\x8B\x40\x58",
-        "xxx????xxxxxxx"
-    )
-    
-    # Level actors pattern
-    LEVEL_ACTORS = (
-        b"\x48\x8B\x89\x00\x00\x00\x00\x48\x85\xC9\x74\x06\x48\x8B\x01",
-        "xxx????xxxxxxxx"
-    )

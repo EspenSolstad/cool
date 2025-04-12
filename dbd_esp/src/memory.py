@@ -6,7 +6,7 @@ from pymem import Pymem
 from pymem.process import module_from_name
 import numpy as np
 from .process_utils import ProcessMonitor
-from .offsets import Patterns, Engine
+from .offsets import Engine
 
 class MemoryCache:
     def __init__(self, max_size: int = 1024):
@@ -84,37 +84,26 @@ class MemoryReader:
                 print(f"[*] Error details: {e}")
                 return False
                 
-            # Get game module
+            # Get game module base
             module = module_from_name(self.pm.process_handle, self.process_name)
             if not module:
-                print("[-] Failed to find game module directly")
-                print("[*] Attempting pattern scan fallback...")
-                # Try to find GWorld through pattern scanning
-                print("[*] Attempting pattern scan with multiple signatures...")
-                
-                # Try each GWorld pattern
-                patterns = [
-                    ("Primary", Patterns.UWORLD),
-                    ("Alt 1", Patterns.UWORLD_ALT1),
-                    ("Alt 2", Patterns.UWORLD_ALT2)
-                ]
-                
-                for pattern_name, pattern in patterns:
-                    print(f"[*] Trying {pattern_name} pattern...")
-                    base_addr = self.find_pattern(*pattern)
-                    if base_addr:
-                        print(f"\n[+] Found GWorld using {pattern_name} pattern!")
-                        # Get module base from pattern address
-                        self.base_address = base_addr & 0xFFFFFFFFFFF00000
-                        print(f"[*] Base address: 0x{self.base_address:X}")
-                        return True
-                
-                print("\n[-] All pattern scans failed")
-                print("[!] The game may have updated")
-                print("[!] ESP may need to be updated")
+                print("[-] Failed to find game module")
+                print("[!] Make sure the game is running")
                 return False
                 
             self.base_address = module.lpBaseOfDll
+            print(f"[+] Found game module at: 0x{self.base_address:X}")
+            
+            # Verify GNames and GObjects
+            gnames_ptr = self.base_address + Engine.GNames
+            gobjects_ptr = self.base_address + Engine.GObjects
+            
+            if not self.read_long(gnames_ptr) or not self.read_long(gobjects_ptr):
+                print("[-] Failed to read GNames/GObjects")
+                print("[!] Game may have updated")
+                return False
+                
+            print("[+] Successfully found game structures")
             return True
             
         except Exception as e:
@@ -135,21 +124,12 @@ class MemoryReader:
         if not self.batch_reads:
             return
             
-        # Suspend other threads during batch read
-        pid = self.pm.process_id
-        suspended_threads = ProcessMonitor.suspend_threads(pid)
-        
-        try:
-            for page_start, addresses in self.batch_reads.items():
-                # Read entire page at once
-                data = self.read_bytes_direct(page_start, self.batch_size)
-                if data:
-                    self.cache.store(page_start, data)
-                    
-        finally:
-            # Resume threads
-            ProcessMonitor.resume_threads(pid, suspended_threads)
-            
+        for page_start, addresses in self.batch_reads.items():
+            # Read entire page at once
+            data = self.read_bytes_direct(page_start, self.batch_size)
+            if data:
+                self.cache.store(page_start, data)
+                
         # Clear batch queue
         self.batch_reads.clear()
         
@@ -224,70 +204,28 @@ class MemoryReader:
         except:
             return ""
             
-    def find_pattern(self, pattern: bytes, mask: str) -> int:
-        """Find pattern with optimized scanning"""
-        if not self.pm:
-            return 0
-            
-        try:
-            chunk_size = 0x10000  # Larger chunks for faster scanning
-            current_addr = 0x10000  # Start after null page
-            max_addr = 0x7FFFFFFF  # Scan up to 2GB of memory
-            last_progress = 0
-            
-            while current_addr < max_addr:
-                # Show progress every 100MB
-                progress = (current_addr * 100) // max_addr
-                if progress > last_progress:
-                    print(f"\r[*] Scanning memory: {progress}%", end='')
-                    last_progress = progress
-                    
-                try:
-                    chunk = self.read_bytes_direct(current_addr, chunk_size)
-                except:
-                    current_addr += chunk_size
-                    continue
-                    
-                if not chunk:
-                    current_addr += chunk_size
-                    continue
-                    
-                for i in range(len(chunk)):
-                    matched = True
-                    for j in range(len(pattern)):
-                        if i + j >= len(chunk):
-                            matched = False
-                            break
-                        if mask[j] != '?' and pattern[j] != chunk[i + j]:
-                            matched = False
-                            break
-                            
-                    if matched:
-                        addr = current_addr + i
-                        print(f"\n[+] Found pattern at: 0x{addr:X}")
-                        return addr
-                        
-                current_addr += chunk_size - len(pattern)
-                
-            print("\n[-] Pattern not found")
-            
-        except Exception as e:
-            print(f"\n[-] Pattern scan failed: {e}")
-            
-        return 0
-        
     def get_game_instance(self) -> int:
         """Get UGameInstance pointer from UWorld"""
         if not self.base_address:
             return 0
             
         try:
-            world_ptr = self.read_long(self.base_address + Engine.UWorld.OwningGameInstance)
+            # Get UWorld pointer from GWorld
+            world_ptr = self.read_long(self.base_address + Engine.GWorld)
             if not world_ptr:
+                print("[-] Failed to read GWorld")
                 return 0
                 
-            print(f"[+] Found GameInstance at: 0x{world_ptr:X}")
-            return world_ptr
+            print(f"[+] Found UWorld at: 0x{world_ptr:X}")
+            
+            # Get GameInstance from UWorld
+            game_instance = self.read_long(world_ptr + Engine.UWorld.OwningGameInstance)
+            if not game_instance:
+                print("[-] Failed to read GameInstance")
+                return 0
+                
+            print(f"[+] Found GameInstance at: 0x{game_instance:X}")
+            return game_instance
             
         except Exception as e:
             print(f"[-] Failed to get GameInstance: {e}")
