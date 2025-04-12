@@ -28,12 +28,43 @@ echo [*] Building ESP executable...
 echo.
 
 REM Clean previous build
-if exist "dist" rmdir /s /q "dist"
-if exist "build" rmdir /s /q "build"
+echo [*] Cleaning previous build...
+if exist "dist\DBD-ESP.exe" (
+    del /f /q "dist\DBD-ESP.exe" >nul 2>&1
+    if exist "dist\DBD-ESP.exe" (
+        echo [-] Failed to remove previous executable
+        echo [!] Please close any running instances of DBD-ESP
+        pause
+        exit /b 1
+    )
+)
+if exist "dist\DBD-ESP-Debug.exe" (
+    del /f /q "dist\DBD-ESP-Debug.exe" >nul 2>&1
+    if exist "dist\DBD-ESP-Debug.exe" (
+        echo [-] Failed to remove previous debug executable
+        echo [!] Please close any running instances of DBD-ESP-Debug
+        pause
+        exit /b 1
+    )
+)
+
+REM Remove build directories
+if exist "dist" rmdir /s /q "dist" >nul 2>&1
+if exist "build" rmdir /s /q "build" >nul 2>&1
+if exist "*.spec" del /f /q *.spec >nul 2>&1
+
+REM Create clean directories
+mkdir dist >nul 2>&1
+mkdir build >nul 2>&1
+
+REM Create temporary work directory
+set "TEMP_DIR=%TEMP%\dbd_esp_build"
+if exist "%TEMP_DIR%" rmdir /s /q "%TEMP_DIR%" >nul 2>&1
+mkdir "%TEMP_DIR%" >nul 2>&1
 
 REM Build console version for debugging
 echo [*] Building console version...
-pyinstaller --noconfirm --onefile ^
+pyinstaller --noconfirm --onefile --workpath "%TEMP_DIR%\build" --distpath "dist" ^
     --hidden-import win32api ^
     --hidden-import win32con ^
     --hidden-import win32process ^
@@ -58,7 +89,7 @@ pyinstaller --noconfirm --onefile ^
 
 REM Build non-console version
 echo [*] Building release version...
-pyinstaller --noconfirm --onefile --noconsole ^
+pyinstaller --noconfirm --onefile --noconsole --workpath "%TEMP_DIR%\build" --distpath "dist" ^
     --hidden-import win32api ^
     --hidden-import win32con ^
     --hidden-import win32process ^
