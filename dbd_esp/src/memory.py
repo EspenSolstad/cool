@@ -250,9 +250,13 @@ class MemoryReader:
                         
                     try:
                         chunk = self.read_bytes_direct(current_addr, chunk_size)
-                        if not chunk:
-                            current_addr += chunk_size
-                            continue
+                    except:
+                        current_addr += chunk_size
+                        continue
+                        
+                    if not chunk:
+                        current_addr += chunk_size
+                        continue
                         
                     for i in range(len(chunk)):
                         matched = True
