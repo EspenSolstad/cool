@@ -117,18 +117,23 @@ class Aimbot {
         
         ; Adjust speed based on distance
         if (distance > 400)
-            baseSpeed *= 0.7
+            baseSpeed := baseSpeed * 0.7
         else if (distance > 200)
-            baseSpeed *= 0.85
+            baseSpeed := baseSpeed * 0.85
         
         ; Adjust speed based on consecutive hits
         if (this.consecutiveHits > 5)
-            baseSpeed *= 1.2
+            baseSpeed := baseSpeed * 1.2
         else if (this.consecutiveHits > 2)
-            baseSpeed *= 1.1
+            baseSpeed := baseSpeed * 1.1
             
         ; Ensure speed stays within reasonable bounds
-        return Min(Max(baseSpeed, 0.5), 1.5)
+        if (baseSpeed < 0.5)
+            baseSpeed := 0.5
+        if (baseSpeed > 1.5)
+            baseSpeed := 1.5
+            
+        return baseSpeed
     }
     
     ; Main update function to be called in the aim loop

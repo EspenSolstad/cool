@@ -69,24 +69,24 @@ class RecoilCompensation {
         }
         
         ; Calculate compensation values using exponential smoothing
-        compensationX := 0
-        compensationY := 0
+        compensationX := 0.0
+        compensationY := 0.0
         
         ; Weight recent samples more heavily
         sampleWeight := 1.0
-        totalWeight := 0
+        totalWeight := 0.0
         
         for i, sample in this.recoilSamples {
-            compensationX += (sample.x * sampleWeight)
-            compensationY += (sample.y * sampleWeight)
-            totalWeight += sampleWeight
-            sampleWeight *= 0.9  ; Decay weight for older samples
+            compensationX := compensationX + (sample.x * sampleWeight)
+            compensationY := compensationY + (sample.y * sampleWeight)
+            totalWeight := totalWeight + sampleWeight
+            sampleWeight := sampleWeight * 0.9  ; Decay weight for older samples
         }
         
         ; Calculate weighted average
         if (totalWeight > 0) {
-            compensationX /= totalWeight
-            compensationY /= totalWeight
+            compensationX := compensationX / totalWeight
+            compensationY := compensationY / totalWeight
         }
         
         ; Apply smoothing to compensation values

@@ -37,7 +37,9 @@ GetMousePos() {
 
 ; Calculate distance between two points
 CalculateDistance(x1, y1, x2, y2) {
-    return Sqrt((x2-x1)**2 + (y2-y1)**2)
+    deltaX := x2 - x1
+    deltaY := y2 - y1
+    return Sqrt(deltaX * deltaX + deltaY * deltaY)
 }
 
 ; Smooth mouse movement with dynamic compensation
@@ -92,10 +94,12 @@ GetScreenRegion(x, y, width, height) {
 
 ; Calculate movement vector between two points
 CalculateMovementVector(x1, y1, x2, y2) {
+    deltaX := x2 - x1
+    deltaY := y2 - y1
     return {
-        x: x2 - x1,
-        y: y2 - y1,
-        magnitude: Sqrt((x2-x1)**2 + (y2-y1)**2)
+        x: deltaX,
+        y: deltaY,
+        magnitude: Sqrt(deltaX * deltaX + deltaY * deltaY)
     }
 }
 
