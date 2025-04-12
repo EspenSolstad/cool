@@ -31,7 +31,33 @@ REM Clean previous build
 if exist "dist" rmdir /s /q "dist"
 if exist "build" rmdir /s /q "build"
 
-REM Build with PyInstaller
+REM Build console version for debugging
+echo [*] Building console version...
+pyinstaller --noconfirm --onefile ^
+    --hidden-import win32api ^
+    --hidden-import win32con ^
+    --hidden-import win32process ^
+    --hidden-import win32security ^
+    --hidden-import win32event ^
+    --hidden-import win32service ^
+    --hidden-import win32serviceutil ^
+    --hidden-import win32ts ^
+    --hidden-import pygame ^
+    --hidden-import numpy ^
+    --hidden-import psutil ^
+    --hidden-import pymem ^
+    --hidden-import src ^
+    --hidden-import src.memory ^
+    --hidden-import src.entity ^
+    --hidden-import src.overlay ^
+    --hidden-import src.process_utils ^
+    --hidden-import src.offsets ^
+    --add-data "src;src" ^
+    --name "DBD-ESP-Debug" ^
+    run.py
+
+REM Build non-console version
+echo [*] Building release version...
 pyinstaller --noconfirm --onefile --noconsole ^
     --hidden-import win32api ^
     --hidden-import win32con ^
@@ -64,22 +90,46 @@ if %ERRORLEVEL% neq 0 (
 
 echo.
 echo [+] Build successful!
-echo [*] Executable created at: dist\run.exe
+echo [*] Executables created:
+echo     - dist\DBD-ESP.exe (Release version)
+echo     - dist\DBD-ESP-Debug.exe (Debug version)
+echo.
+echo [!] If the release version doesn't work:
+echo     1. Run DBD-ESP-Debug.exe to see error messages
+echo     2. Check error.log for detailed error information
 echo.
 
 REM Ask if user wants to run the ESP
 set /p run_now="Do you want to run the ESP now? (Y/N) "
 if /i "%run_now%"=="Y" (
     echo.
-    echo [*] Starting ESP...
-    echo [!] Remember to have Dead by Daylight running!
-    echo.
-    start "" "dist\run.exe"
+    echo [*] Choose version to run:
+    echo     1. Release version (DBD-ESP.exe)
+    echo     2. Debug version (DBD-ESP-Debug.exe)
+    set /p version="Enter choice (1/2): "
+    
+    if "%version%"=="1" (
+        echo.
+        echo [*] Starting release version...
+        echo [!] Remember to have Dead by Daylight running!
+        echo.
+        start "" "dist\DBD-ESP.exe"
+    ) else if "%version%"=="2" (
+        echo.
+        echo [*] Starting debug version...
+        echo [!] Remember to have Dead by Daylight running!
+        echo.
+        start "" "dist\DBD-ESP-Debug.exe"
+    ) else (
+        echo.
+        echo [-] Invalid choice
+    )
 )
 
 echo.
-echo [*] You can find the ESP executable in the dist folder
-echo [*] Always run as administrator!
+echo [*] You can find both executables in the dist folder
+echo [!] Always run as administrator!
+echo [!] Use debug version if you encounter problems
 echo.
 
 pause

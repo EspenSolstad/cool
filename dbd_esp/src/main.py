@@ -9,11 +9,32 @@ import win32event
 import win32process
 import win32con
 import win32api
+import logging
+import traceback
+from datetime import datetime
+
+# Set up logging
+log_file = f"dbd_esp_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+logging.basicConfig(
+    filename=log_file,
+    level=logging.DEBUG,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+
+# Also log to console if available
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.INFO)
+logging.getLogger().addHandler(console_handler)
 
 from .memory import MemoryReader
 from .entity import EntityManager
 from .overlay import Overlay
 from .process_utils import ProcessHider, ProcessMonitor
+
+def log_exception(e: Exception):
+    """Log an exception with full traceback"""
+    logging.error(f"Exception occurred: {str(e)}")
+    logging.error(traceback.format_exc())
 
 class ESPHack:
     def __init__(self):
