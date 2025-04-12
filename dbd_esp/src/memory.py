@@ -232,55 +232,92 @@ class MemoryReader:
         try:
             chunk_size = 0x10000  # Larger chunks for faster scanning
             current_addr = 0x10000  # Start after null page
+            max_addr = 0x7FFFFFFF  # Scan up to 2GB of memory
+            last_progress = 0
             
-            # Suspend threads during pattern scan
-            pid = self.pm.process_id
-            suspended_threads = ProcessMonitor.suspend_threads(pid)
-            
-            try:
-                max_addr = 0x7FFFFFFF  # Scan up to 2GB of memory
-                last_progress = 0
-                
-                while current_addr < max_addr:
-                    # Show progress every 100MB
-                    progress = (current_addr * 100) // max_addr
-                    if progress > last_progress:
-                        print(f"\r[*] Scanning memory: {progress}%", end='')
-                        last_progress = progress
-                        
-                    try:
-                        chunk = self.read_bytes_direct(current_addr, chunk_size)
-                    except:
-                        current_addr += chunk_size
-                        continue
-                        
-                    if not chunk:
-                        current_addr += chunk_size
-                        continue
-                        
-                    for i in range(len(chunk)):
-                        matched = True
-                        for j in range(len(pattern)):
-                            if i + j >= len(chunk):
-                                matched = False
-                                break
-                            if mask[j] != '?' and pattern[j] != chunk[i + j]:
-                                matched = False
-                                break
-                                
-                        if matched:
-                            return current_addr + i
-                            
-                    current_addr += chunk_size - len(pattern)
+            while current_addr < max_addr:
+                # Show progress every 100MB
+                progress = (current_addr * 100) // max_addr
+                if progress > last_progress:
+                    print(f"\r[*] Scanning memory: {progress}%", end='')
+                    last_progress = progress
                     
-            finally:
-                # Resume threads
-                ProcessMonitor.resume_threads(pid, suspended_threads)
+                try:
+                    chunk = self.read_bytes_direct(current_addr, chunk_size)
+                except:
+                    current_addr += chunk_size
+                    continue
+                    
+                if not chunk:
+                    current_addr += chunk_size
+                    continue
+                    
+                for i in range(len(chunk)):
+                    matched = True
+                    for j in range(len(pattern)):
+                        if i + j >= len(chunk):
+                            matched = False
+                            break
+                        if mask[j] != '?' and pattern[j] != chunk[i + j]:
+                            matched = False
+                            break
+                            
+                    if matched:
+                        addr = current_addr + i
+                        print(f"\n[+] Found pattern at: 0x{addr:X}")
+                        return addr
+                        
+                current_addr += chunk_size - len(pattern)
                 
+            print("\n[-] Pattern not found")
+            
         except Exception as e:
-            print(f"Pattern scan failed: {e}")
+            print(f"\n[-] Pattern scan failed: {e}")
             
         return 0
+        
+    def get_game_instance(self) -> int:
+        """Get UGameInstance pointer from UWorld"""
+        if not self.base_address:
+            return 0
+            
+        try:
+            world_ptr = self.read_long(self.base_address + Engine.UWorld.OwningGameInstance)
+            if not world_ptr:
+                return 0
+                
+            print(f"[+] Found GameInstance at: 0x{world_ptr:X}")
+            return world_ptr
+            
+        except Exception as e:
+            print(f"[-] Failed to get GameInstance: {e}")
+            return 0
+            
+    def get_local_players(self, game_instance: int) -> List[int]:
+        """Get array of local players from GameInstance"""
+        if not game_instance:
+            return []
+            
+        try:
+            players_array = game_instance + Engine.UGameInstance.LocalPlayers
+            array_size = self.read_int(players_array + 0x8)  # TArray size
+            array_data = self.read_long(players_array)  # TArray data
+            
+            if not array_size or not array_data:
+                return []
+                
+            players = []
+            for i in range(min(array_size, 10)):  # Limit to 10 players max
+                player_ptr = self.read_long(array_data + i * 8)
+                if player_ptr:
+                    players.append(player_ptr)
+                    
+            print(f"[+] Found {len(players)} players")
+            return players
+            
+        except Exception as e:
+            print(f"[-] Failed to get players: {e}")
+            return []
         
     def get_pointer_chain(self, base: int, offsets: List[int]) -> int:
         """Follow pointer chain with batch optimization"""

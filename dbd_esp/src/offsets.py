@@ -1,11 +1,32 @@
-# Game engine offsets ported from C++ version
+# Game engine offsets and structure layouts
 class Engine:
     GObjects = 0xa80a590
     GNames = 0xa747d40
-    GWorld = 0xA8C7160
-    PEOffset = 0x3B56050
+    
+    # Core structure offsets
+    class UWorld:
+        OwningGameInstance = 0x1c8
+        PersistentLevel = 0x38
+        GameState = 0x168
+        
+    class UGameInstance:
+        LocalPlayers = 0x40
+        
+    class ACharacter:
+        Mesh = 0x328
+        RootComponent = 0x1a8
+        
+    class ADBDPlayer:
+        PlayerData = 0xb98
+        CharacterInventory = 0xaf8
+        
+    class ASurvivor:
+        BaseOffset = 0x19e0  # Base offset for BP_Camper_Character_C
+        
+    class AKiller:
+        BaseOffset = 0x1ab0  # Base offset for BP_Slasher_Character_C
 
-# UE4 structure offsets
+# UE4 base structure offsets
 class UE4:
     # UStruct
     Children = 0x50

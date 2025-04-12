@@ -41,101 +41,95 @@ class EntityManager:
         """Update all entity information"""
         self.entities.clear()
         
-        # Get UWorld
-        uworld_ptr = self.memory.base_address + Engine.GWorld
-        uworld = self.memory.read_long(uworld_ptr)
-        if not uworld:
+        # Get GameInstance from UWorld
+        game_instance = self.memory.get_game_instance()
+        if not game_instance:
             return
             
-        # Get GameState
-        game_state = self.memory.read_long(uworld)
-        if not game_state:
-            return
-            
-        # Get player array using pattern or direct offset
-        player_array = self.memory.get_pointer_chain(game_state, [Offsets.PlayerData])
-        if not player_array:
-            return
-            
-        # Read array size
-        count = self.memory.read_int(player_array + 0x8)
-        if count <= 0 or count > 8:  # Max 8 players in DBD
-            return
-            
-        # Get data pointer
-        data_ptr = self.memory.read_long(player_array)
-        if not data_ptr:
+        # Get local players array
+        players = self.memory.get_local_players(game_instance)
+        if not players:
             return
             
         # Process each player
-        for i in range(count):
-            player_ptr = self.memory.read_long(data_ptr + (i * 8))
-            if not player_ptr:
-                continue
-                
-            self._process_player(player_ptr)
+        for player_ptr in players:
+            if player_ptr:
+                self._process_player(player_ptr)
     
     def _process_player(self, address: int) -> None:
         """Process a single player entity"""
         if not address:
             return
             
-        # Get player state
-        player_state = self.memory.read_long(address + Offsets.PlayerData)
-        if not player_state:
-            return
+        try:
+            # Get mesh component for position
+            mesh = self.memory.read_long(address + Engine.ACharacter.Mesh)
+            if not mesh:
+                return
+                
+            # Get root component for position
+            root = self.memory.read_long(address + Engine.ACharacter.RootComponent)
+            if not root:
+                return
+                
+            # Get position from root component
+            pos_raw = self.memory.read_vec3(root + 0x128)  # Component relative location
+            position = Vector3(*pos_raw)
             
-        # Get role (killer vs survivor)
-        role = self.memory.read_bytes(player_state + Offsets.GameRole, 1)[0]
-        is_killer = (role == 1)
-        
-        # Get root component for position
-        root_comp = self.memory.read_long(address + UE4.Children)
-        if not root_comp:
-            return
+            # Check if killer or survivor based on vtable/class name
+            player_data = self.memory.read_long(address + Engine.ADBDPlayer.PlayerData)
+            if not player_data:
+                return
+                
+            # Get role from player data
+            role = self.memory.read_bytes(player_data + Offsets.GameRole, 1)[0]
+            is_killer = (role == 1)
             
-        # Get position
-        pos_raw = self.memory.read_vec3(root_comp + UE4.FieldNext)
-        position = Vector3(*pos_raw)
+            # Handle survivor-specific data
+            health = 100
+            item_name = "None"
+            being_carried = False
+            
+            if not is_killer:
+                # Get survivor state
+                state_offset = Engine.ASurvivor.BaseOffset + Offsets.CamperState
+                camper_state = self.memory.read_bytes(address + state_offset, 1)[0]
+                health = 100 if camper_state == 0 else 50 if camper_state == 1 else 0
+                
+                # Check if being carried
+                carry_offset = Engine.ASurvivor.BaseOffset + Offsets.CarryingPlayer
+                carrying_player = self.memory.read_long(address + carry_offset)
+                being_carried = carrying_player != 0
+                
+                # Get inventory items
+                inventory = self.memory.read_long(address + Engine.ADBDPlayer.CharacterInventory)
+                if inventory:
+                    item_count = self.memory.read_int(inventory + Offsets.ItemCount)
+                    if item_count > 0:
+                        item_type = self.memory.read_bytes(inventory + Offsets.ItemType, 1)[0]
+                        is_in_use = bool(self.memory.read_bytes(inventory + Offsets.IsInUse, 1)[0])
+                        
+                        if is_in_use:
+                            item_names = {
+                                0: "Medkit",
+                                1: "Flashlight",
+                                2: "Toolbox",
+                                3: "Map",
+                                4: "Key"
+                            }
+                            item_name = item_names.get(item_type, "Unknown")
         
-        # Get survivor state if not killer
-        health = 100
-        if not is_killer:
-            camper_state = self.memory.read_bytes(address + Offsets.CamperState, 1)[0]
-            health = 100 if camper_state == 0 else 50 if camper_state == 1 else 0
-        
-        # Check if being carried
-        carrying_player = self.memory.read_long(address + Offsets.CarryingPlayer)
-        being_carried = carrying_player != 0
-        
-        # Get item info for survivors
-        item_name = "None"
-        if not is_killer:
-            inventory = self.memory.read_long(address + Offsets.CharacterInventory)
-            if inventory:
-                item_count = self.memory.read_int(inventory + Offsets.ItemCount)
-                if item_count > 0:
-                    item_type = self.memory.read_bytes(inventory + Offsets.ItemType, 1)[0]
-                    is_in_use = bool(self.memory.read_bytes(inventory + Offsets.IsInUse, 1)[0])
-                    
-                    if is_in_use:
-                        item_names = {
-                            0: "Medkit",
-                            1: "Flashlight",
-                            2: "Toolbox",
-                            3: "Map",
-                            4: "Key"
-                        }
-                        item_name = item_names.get(item_type, "Unknown")
-        
-        # Create entity
-        entity = Entity(
-            position=position,
-            is_killer=is_killer,
-            health=health,
-            name="KILLER" if is_killer else f"Survivor - {item_name}",
-            item_name=item_name,
-            being_carried=being_carried
-        )
-        
-        self.entities.append(entity)
+            # Create entity
+            entity = Entity(
+                position=position,
+                is_killer=is_killer,
+                health=health,
+                name="KILLER" if is_killer else f"Survivor - {item_name}",
+                item_name=item_name,
+                being_carried=being_carried
+            )
+            
+            self.entities.append(entity)
+            
+        except Exception as e:
+            print(f"[-] Failed to process player at {hex(address)}: {e}")
