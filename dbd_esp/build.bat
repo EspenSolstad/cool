@@ -44,7 +44,15 @@ pyinstaller --noconfirm --onefile --noconsole ^
     --hidden-import pygame ^
     --hidden-import numpy ^
     --hidden-import psutil ^
+    --hidden-import pymem ^
+    --hidden-import src ^
+    --hidden-import src.memory ^
+    --hidden-import src.entity ^
+    --hidden-import src.overlay ^
+    --hidden-import src.process_utils ^
+    --hidden-import src.offsets ^
     --add-data "src;src" ^
+    --name "DBD-ESP" ^
     run.py
 
 if %ERRORLEVEL% neq 0 (

@@ -190,7 +190,7 @@ def main():
         
     # Create mutex to prevent multiple instances
     mutex = win32event.CreateMutex(None, 1, "DBD_ESP_MUTEX")
-    if win32api.GetLastError() == win32con.ERROR_ALREADY_EXISTS:
+    if win32api.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
         print("[-] Another instance is already running")
         return
         
