@@ -8,6 +8,11 @@
 #MaxHotkeysPerInterval 127
 SetWorkingDir %A_ScriptDir%
 
+; Performance settings
+SetMouseDelay, -1
+SetDefaultMouseSpeed, 0
+CoordMode, Mouse, Screen
+
 ; Create GUI for debug info
 Gui, +AlwaysOnTop
 Gui, Add, Text, vDebugText w300 h200
@@ -101,10 +106,7 @@ SmoothMove(targetX, targetY) {
     moveY := moveY * sensitivity
     
     Loop % steps {
-        DllCall("mouse_event", "UInt", 0x01, 
-                "Int", Round(moveX), 
-                "Int", Round(moveY), 
-                "UInt", 0, "Int", 0)
+        MouseMove, Round(moveX), Round(moveY), 1, R
         Sleep 1
     }
 }
@@ -150,10 +152,7 @@ CompensateRecoil() {
         if (ZoomActive)
             compAmount := compAmount * ZoomSens
             
-        DllCall("mouse_event", "UInt", 0x01, 
-                "Int", 0, 
-                "Int", Round(-compAmount), 
-                "UInt", 0, "Int", 0)
+        MouseMove, 0, Round(-compAmount), 1, R
     } else {
         recoilY := recoilY * 0.9
     }
